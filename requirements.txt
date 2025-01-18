@@ -1,0 +1,7 @@
+openai
+PyPDF2
+pdfplumber
+requests
+beautifulsoup4
+python-dotenv
+gradio
