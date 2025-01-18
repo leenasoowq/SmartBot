@@ -61,8 +61,8 @@ def generate_quiz_questions(text, num_questions=5, difficulty="medium"):
             response = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=messages,
-                max_tokens=300,
-                temperature=0,
+                max_tokens=500,
+                temperature=0.7,
             )
             # Access response content correctly
             return response.choices[0].message.content.strip()
