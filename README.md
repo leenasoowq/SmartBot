@@ -1,3 +1,36 @@
+Hi people 
+
+1. Install Dependencies: Run the following command to install the required libraries:
+pip install -r requirements.txt
+
+2. Set up the openai api key (probably later part of the project we can start sharing api accounts so we can utilise to $300)
+   1. Get Your OpenAI API Key:
+      
+      Sign up or log in to OpenAI at https://platform.openai.com/.
+      Go to the API Keys section and generate a new API key.
+      Create a .env File:
+
+      In your project folder, create a file named .env.
+      Add the following content to the file:
+      OPENAI_API_KEY=your_openai_api_key
+      Replace your_openai_api_key with your actual OpenAI API key.
+
+3. To run the code in terminal:
+   python app.py
+
+4. Brief Summary:
+   1. Input: PDF file, text file, URL
+   2. set number of quiz questions
+   3. set difficulty level
+
+
+
+
+
+
+
+
+
 ## **Objective of the Project**
 The project aims to apply classroom knowledge to real-world problems. Through this project, you will:
 
