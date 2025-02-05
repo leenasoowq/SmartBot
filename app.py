@@ -1,209 +1,240 @@
 import os
-from openai import OpenAI
-import requests
-from bs4 import BeautifulSoup
 import pdfplumber
+import faiss
+from sentence_transformers import SentenceTransformer
+from openai import OpenAI
 from dotenv import load_dotenv
 import gradio as gr
-import time
 
 # Load environment variables
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))  # Initialize OpenAI client
 
-# Function to extract text from a PDF file
-def extract_text_from_pdf(file):
-    text = ""
+# Initialize SentenceTransformer and FAISS index
+model = SentenceTransformer('all-MiniLM-L6-v2')  # Pretrained embedding model
+index = faiss.IndexFlatL2(384)  # FAISS index for vector storage
+knowledge_base = []  # Store text chunks for reference
+
+# Global Variables
+quiz_data = []  # Store quiz questions
+current_question = 0  # Track the current question
+answer_submitted = False  # Prevent skipping ahead before submitting
+
+
+# Function to preprocess PDF and add to knowledge base
+def preprocess_pdf_to_knowledge_base(pdf_path):
+    global knowledge_base, index
+    text_chunks = []
     try:
-        with pdfplumber.open(file) as pdf:
+        with pdfplumber.open(pdf_path) as pdf:
             for page in pdf.pages:
-                text += page.extract_text() + "\n"
-    except Exception as e:
-        print(f"Error extracting text from PDF: {e}")
-    return text
+                text = page.extract_text()
+                if text:
+                    text_chunks.append(text)
 
-# Function to extract text from a plain text file
-def extract_text_from_txt(file):
-    try:
-        return file.read().decode("utf-8")
+        # Generate embeddings and add to FAISS index
+        embeddings = model.encode(text_chunks, convert_to_tensor=False)
+        index.add(embeddings)
+        knowledge_base = text_chunks  # Save text chunks for retrieval
     except Exception as e:
-        print(f"Error reading text file: {e}")
-        return ""
+        print(f"Error processing PDF: {e}")
 
-# Function to extract text from a URL
-def extract_text_from_url(url):
-    try:
-        response = requests.get(url)
-        soup = BeautifulSoup(response.text, "html.parser")
-        return soup.get_text(separator="\n")
-    except Exception as e:
-        print(f"Error fetching URL content: {e}")
-        return ""
 
-# Function to generate quiz questions using GPT API
-def generate_quiz_questions(text, num_questions=5, difficulty="medium"):
+# Function to retrieve relevant chunks from the knowledge base
+def retrieve_relevant_chunks(query, top_k=3):
+    query_embedding = model.encode([query], convert_to_tensor=False)
+    distances, indices = index.search(query_embedding, top_k)
+    
+    results = [knowledge_base[idx] for idx in indices[0] if idx < len(knowledge_base)]
+
+    if any(keyword in query.lower() for keyword in ["quiz", "exam", "test", "mcq", "multiple-choice", "questions"]):
+        results = results[:top_k]  # Get only the most relevant chunks for a quiz
+
+    return results
+
+
+# Function to generate quiz questions dynamically
+def generate_quiz_questions_with_rag(query, num_questions=5):
+    retrieved_chunks = retrieve_relevant_chunks(query)
+    context = "\n\n".join(retrieved_chunks)
+
     messages = [
-        {"role": "system", "content": "You are a helpful assistant that generates quiz questions."},
+        {"role": "system", "content": "You are a helpful assistant that generates multiple-choice quiz questions."},
         {"role": "user", "content": f"""
-            Create {num_questions} multiple-choice quiz questions based on the following text.
-            The difficulty level should be '{difficulty}'.
-            Each question should have:
-            1. A clearly stated question.
-            2. Four answer choices labeled A, B, C, and D.
-            3. A correct answer labeled as 'Correct Answer'.
+            Generate **exactly {num_questions}** multiple-choice quiz questions based on the following context.
             
-            Text:
-            {text}
+            ### Instructions:
+            - Each question must have:
+              1. A clear question statement.
+              2. Four answer choices labeled A, B, C, and D.
+              3. The correct answer labeled as **Correct Answer: X**.
+              4. A short explanation labeled as **Explanation: ...**.
+            
+            Context:
+            {context}
         """}
     ]
-    for _ in range(3):  # Retry up to 3 times
-        try:
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=messages,
-                max_tokens=500,
-                temperature=0.7,
-            )
-            # Access response content correctly
-            return response.choices[0].message.content.strip()
-        except Exception as e:
-            if "rate_limit_exceeded" in str(e):
-                print("Rate limit exceeded. Retrying in 60 seconds...")
-                time.sleep(60)  # Wait for 60 seconds before retrying
-            else:
-                print(f"Error generating questions: {e}")
-                return "Error: Failed to generate quiz questions."
-    return "Error: Failed to generate quiz questions due to repeated rate limit issues."
-
-# Parse generated quiz into questions, options, and correct answers
-def parse_quiz(quiz_text):
-    questions = []
-    quiz_items = quiz_text.split("\n\n")
-    for item in quiz_items:
-        if "**Correct Answer:**" in item:
-            question_part, correct_answer = item.split("**Correct Answer:**")
-            question_lines = question_part.strip().split("\n")
-            question = question_lines[0]
-            options = question_lines[1:]
-            correct_answer = correct_answer.strip()
-            questions.append({"question": question, "options": options, "correct": correct_answer})
-    return questions
-
-# Function to handle input and generate quiz
-def process_input(input_type, input_data, num_questions, difficulty):
-    text = ""
-
-    if input_type == "PDF File":
-        text = extract_text_from_pdf(input_data)
-    elif input_type == "Text File":
-        text = extract_text_from_txt(input_data)
-    elif input_type == "URL":
-        text = extract_text_from_url(input_data)
-
-    if not text.strip():
-        return "Error: No text could be extracted or provided."
 
     try:
-        num_questions = int(num_questions)
-    except ValueError:
-        return "Error: Please enter a valid number of questions."
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            max_tokens=1000,  # Increased to allow more content
+            temperature=0.7,
+        )
+        quiz_text = response.choices[0].message.content.strip()
 
-    quiz_text = generate_quiz_questions(text, num_questions, difficulty)
+        # Split questions into a list
+        questions = quiz_text.split("\n\n")
 
-    if "Error:" in quiz_text:
-        return quiz_text
+        parsed_questions = []
+        for question in questions:
+            if "Correct Answer: " in question and "Explanation:" in question:
+                question_text = question.split("Correct Answer: ")[0].strip()
+                correct_answer = question.split("Correct Answer: ")[-1].split("Explanation:")[0].strip().replace("**", "").strip()
+                explanation = question.split("Explanation:")[-1].strip()
+                options = ["A", "B", "C", "D"]
+                parsed_questions.append((question_text, options, correct_answer, explanation))
+        
+        # Return exactly the number of requested questions
+        return parsed_questions[:num_questions]
 
-    return parse_quiz(quiz_text)
+    except Exception as e:
+        return [("Error: Failed to generate quiz.", [], "N/A", "No explanation available.")]
 
-# Set up Gradio interface
+
+# Gradio Chatbot and Quiz Interface
 def main():
-    def interface(input_type, input_data, url_input, num_questions, difficulty):
-        input_value = input_data if input_type in ["PDF File", "Text File"] else url_input
-        quiz_data = process_input(input_type, input_value, num_questions, difficulty)
-        if isinstance(quiz_data, str):
-            return quiz_data, None  # Return error message
-        return "Quiz Generated!", quiz_data
-
-    def check_answer(user_answer, correct_answer):
-        if user_answer == correct_answer:
-            return "Correct!"
-        else:
-            return f"Incorrect! The correct answer is: {correct_answer}"
-
     with gr.Blocks() as demo:
-        gr.Markdown("## Quiz Generator")
+        gr.Markdown("## Knowledge Base Chatbot with Interactive Quiz Mode")
 
-        input_type = gr.Radio(["PDF File", "Text File", "URL"], label="Select Input Type")
+        chatbot = gr.Chatbot(label="Knowledge Base Bot")
 
-        input_data = gr.File(label="Upload File (for PDF or Text File)", file_types=[".pdf", ".txt"], visible=False)
-        url_input = gr.Textbox(label="Enter URL", visible=False)
+        # Upload Section
+        with gr.Row():
+            file_upload = gr.File(label="Upload File (PDF or Text)", file_types=[".pdf", ".txt"], visible=True)
+            upload_status = gr.Textbox(label="Upload Status", interactive=False)
 
-        num_questions = gr.Number(label="Number of Questions", value=5, precision=0)
+        def process_upload(file):
+            global index, knowledge_base
+            index.reset()
+            knowledge_base = []
+            if file:
+                preprocess_pdf_to_knowledge_base(file.name)
+            return "Knowledge base loaded successfully!"
 
-        difficulty = gr.Radio(
-            ["easy", "medium", "hard"], label="Select Difficulty Level", value="easy"
-        )
+        upload_button = gr.Button("Load Knowledge Base")
+        upload_button.click(process_upload, inputs=[file_upload], outputs=upload_status)
 
-        quiz_status = gr.Textbox(label="Quiz Status", interactive=False)
-        question_box = gr.Textbox(label="Question", interactive=False, visible=False)
-        options_box = gr.Radio(choices=[], label="Options", visible=False)
-        feedback_box = gr.Textbox(label="Feedback", interactive=False, visible=False)
-        next_button = gr.Button("Next Question", visible=False)
+        # Chat Section
+        with gr.Row():
+            user_input = gr.Textbox(label="Your Query", placeholder="Ask a question or request a quiz.")
+            submit_button = gr.Button("Submit")
 
-        quiz_data = []
-        question_index = 0
+        # Quiz Interaction Section
+        quiz_question = gr.Textbox(label="Current Question", interactive=False)
+        answer_choices = gr.Radio(label="Your Answer", choices=["A", "B", "C", "D"], interactive=True)
+        submit_answer_btn = gr.Button("Submit Answer", interactive=True)
+        feedback = gr.Textbox(label="Feedback", interactive=False)
+        next_btn = gr.Button("Next Question", interactive=False)
 
-        def toggle_input_visibility(choice):
-            # Toggle visibility based on selected input type
-            return gr.update(visible=choice in ["PDF File", "Text File"]), gr.update(visible=choice == "URL")
+        # Function to handle answer submission 
+        def submit_answer(user_answer):
+            global current_question, quiz_data, answer_submitted
+            if current_question < len(quiz_data):
+                question_text, options, correct_answer, explanation = quiz_data[current_question]
 
-        input_type.change(toggle_input_visibility, input_type, [input_data, url_input])
+                # Ensure comparison is case-insensitive and formatted correctly
+                is_correct = user_answer.strip().upper() == correct_answer.strip().upper()
+                feedback_msg = "✅ Correct!" if is_correct else f"❌ Incorrect. The correct answer is: {correct_answer}\n\n💡 Explanation: {explanation}"
 
-        def load_quiz(input_type, input_data, url_input, num_questions, difficulty):
-            nonlocal quiz_data, question_index
-            quiz_status, quiz_data = interface(input_type, input_data, url_input, num_questions, difficulty)
-            question_index = 0
-            if isinstance(quiz_data, list) and quiz_data:
-                question = quiz_data[0]["question"]
-                options = quiz_data[0]["options"]
-                return (
-                    quiz_status,
-                    question,
-                    gr.update(choices=options, visible=True),  # Populate options dynamically
-                    gr.update(visible=True),  # Show feedback
-                    gr.update(visible=True),  # Show next button
+                answer_submitted = True  # Enable next question button
+                return feedback_msg, gr.update(interactive=False), gr.update(interactive=True)
+            else:
+                return "No more questions!", gr.update(interactive=False), gr.update(interactive=False)
+
+        submit_answer_btn.click(submit_answer, inputs=[answer_choices], outputs=[feedback, submit_answer_btn, next_btn])
+
+        # Function to handle quiz progression
+        def next_question():
+            global current_question, quiz_data, answer_submitted
+
+            if answer_submitted and current_question < len(quiz_data) - 1:
+                current_question += 1
+                question_text, options, correct_answer, explanation = quiz_data[current_question]
+                answer_submitted = False  # Reset for new question
+                return question_text, options, "", gr.update(interactive=True), gr.update(interactive=False)
+            
+            elif len(quiz_data) == 1:  # Stop if only one question exists
+                return "No more questions available!", [], "Quiz finished!", gr.update(interactive=False), gr.update(interactive=False)
+            
+            else:
+                return "Quiz completed!", [], "Quiz finished!", gr.update(interactive=False), gr.update(interactive=False)
+
+        next_btn.click(next_question, outputs=[quiz_question, answer_choices, feedback, submit_answer_btn, next_btn])
+
+        def handle_prompt(query):
+            retrieved_chunks = retrieve_relevant_chunks(query)
+            context = "\n\n".join(retrieved_chunks)
+
+            # Check if the user requested a summary
+            if "summarize" in query.lower() or "summarise" in query.lower():
+                messages = [
+                    {"role": "system", "content": "You are an AI assistant that summarizes documents."},
+                    {"role": "user", "content": f"Summarize the following text:\n\n{context}"}
+                ]
+            else:
+                messages = [
+                    {"role": "system", "content": "You are a helpful assistant that answers questions."},
+                    {"role": "user", "content": f"""
+                        Based on the following context, answer the query:
+
+                        Context:
+                        {context}
+
+                        Query:
+                        {query}
+                    """}
+                ]
+
+            try:
+                response = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=messages,
+                    max_tokens=300,  # Set a reasonable limit for summaries
+                    temperature=0.7,
                 )
-            return (
-                quiz_status,
-                "",
-                gr.update(choices=[], visible=False),
-                gr.update(visible=False),
-                gr.update(visible=False),
-            )
+                return response.choices[0].message.content.strip()
+            except Exception as e:
+                return f"Error: {e}"
 
 
-        def handle_next_question(selected_option):
-            nonlocal question_index
-            if question_index < len(quiz_data):
-                correct_answer = quiz_data[question_index]["correct"]
-                feedback = check_answer(selected_option, correct_answer)
-                question_index += 1
-                if question_index < len(quiz_data):
-                    next_question = quiz_data[question_index]["question"]
-                    next_options = quiz_data[question_index]["options"]
-                    return feedback, next_question, gr.update(choices=next_options, visible=True)
+        # Function to handle user queries with OpenAI
+        def chat_response(history, query):
+            global quiz_data, current_question, answer_submitted
+
+            if "quiz" in query.lower():
+                num_questions = int(query.split(" ")[2]) if query.split(" ")[2].isdigit() else 5
+                quiz_data.clear()
+                quiz_data.extend(generate_quiz_questions_with_rag(query, num_questions))
+                current_question = 0
+                answer_submitted = False
+
+                if quiz_data:
+                    return history + [(query, "Quiz started!")], quiz_data[0][0], quiz_data[0][1], "", gr.update(interactive=True), gr.update(interactive=False)
                 else:
-                    return feedback, "Quiz Completed!", gr.update(choices=[], visible=False)
-            return "", "", gr.update(choices=[], visible=False)
+                    return history + [(query, "Failed to generate quiz.")], "No questions available.", [], "", gr.update(interactive=False), gr.update(interactive=False)
 
-        generate_button = gr.Button("Generate Quiz")
-        generate_button.click(
-            load_quiz,
-            [input_type, input_data, url_input, num_questions, difficulty],
-            [quiz_status, question_box, options_box, feedback_box, next_button],
-        )
+            elif "summarize" in query.lower() or "summarise" in query.lower():
+                summary = handle_prompt(query)
+                return history + [(query, summary)], "", [], "", gr.update(interactive=False), gr.update(interactive=False)
 
-        options_box.change(handle_next_question, inputs=[options_box], outputs=[feedback_box, question_box, options_box])
+            else:
+                response = handle_prompt(query)
+                return history + [(query, response)], "", [], "", gr.update(interactive=False), gr.update(interactive=False)
+
+
+        submit_button.click(chat_response, inputs=[chatbot, user_input], outputs=[chatbot, quiz_question, answer_choices, feedback, submit_answer_btn, next_btn])
 
     demo.launch()
 
