@@ -1,56 +1,56 @@
+from langchain.document_loaders import PyPDFLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.vectorstores import Chroma
+from langchain.embeddings import HuggingFaceEmbeddings
+
 import os
-import pdfplumber
-import faiss
-from sentence_transformers import SentenceTransformer
-from openai import OpenAI
-from dotenv import load_dotenv
 import gradio as gr
+from dotenv import load_dotenv
+from openai import OpenAI
 
 # Load environment variables
 load_dotenv()
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))  # Initialize OpenAI client
-
-# Initialize SentenceTransformer and FAISS index
-model = SentenceTransformer('all-MiniLM-L6-v2')  # Pretrained embedding model
-index = faiss.IndexFlatL2(384)  # FAISS index for vector storage
-knowledge_base = []  # Store text chunks for reference
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # Global Variables
 quiz_data = []  # Store quiz questions
 current_question = 0  # Track the current question
 answer_submitted = False  # Prevent skipping ahead before submitting
 
+# Initialize Embeddings Model for LangChain
+embedding_model = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
-# Function to preprocess PDF and add to knowledge base
+# Initialize ChromaDB
+vectorstore = Chroma(persist_directory="./chroma_db", embedding_function=embedding_model)
+
 def preprocess_pdf_to_knowledge_base(pdf_path):
-    global knowledge_base, index
-    text_chunks = []
+    """Loads a PDF, extracts text, splits it, and stores in ChromaDB"""
     try:
-        with pdfplumber.open(pdf_path) as pdf:
-            for page in pdf.pages:
-                text = page.extract_text()
-                if text:
-                    text_chunks.append(text)
+        loader = PyPDFLoader(pdf_path)
+        documents = loader.load()
 
-        # Generate embeddings and add to FAISS index
-        embeddings = model.encode(text_chunks, convert_to_tensor=False)
-        index.add(embeddings)
-        knowledge_base = text_chunks  # Save text chunks for retrieval
+        # Split text into chunks
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
+        docs = text_splitter.split_documents(documents)
+
+        # Store embeddings in Chroma
+        vectorstore.add_documents(docs)
+        vectorstore.persist()
+        return "Knowledge base loaded successfully!"
     except Exception as e:
-        print(f"Error processing PDF: {e}")
+        return f"Error processing PDF: {e}"
+
 
 
 # Function to retrieve relevant chunks from the knowledge base
 def retrieve_relevant_chunks(query, top_k=3):
-    query_embedding = model.encode([query], convert_to_tensor=False)
-    distances, indices = index.search(query_embedding, top_k)
-    
-    results = [knowledge_base[idx] for idx in indices[0] if idx < len(knowledge_base)]
+    """Retrieve the most relevant text chunks from ChromaDB."""
+    try:
+        results = vectorstore.similarity_search(query, k=top_k)
+        return [doc.page_content for doc in results]
+    except Exception as e:
+        return [f"Error retrieving documents: {e}"]
 
-    if any(keyword in query.lower() for keyword in ["quiz", "exam", "test", "mcq", "multiple-choice", "questions"]):
-        results = results[:top_k]  # Get only the most relevant chunks for a quiz
-
-    return results
 
 
 # Function to generate quiz questions dynamically
@@ -61,15 +61,17 @@ def generate_quiz_questions_with_rag(query, num_questions=5):
     messages = [
         {"role": "system", "content": "You are a helpful assistant that generates multiple-choice quiz questions."},
         {"role": "user", "content": f"""
-            Generate **exactly {num_questions}** multiple-choice quiz questions based on the following context.
-            
-            ### Instructions:
-            - Each question must have:
-              1. A clear question statement.
-              2. Four answer choices labeled A, B, C, and D.
-              3. The correct answer labeled as **Correct Answer: X**.
-              4. A short explanation labeled as **Explanation: ...**.
-            
+            Generate exactly {num_questions} multiple-choice quiz questions based on the following context.
+
+            ### Format:
+            - Question: <question>
+            - A) <option1>
+            - B) <option2>
+            - C) <option3>
+            - D) <option4>
+            - Correct Answer: <correct_option>
+            - Explanation: <why correct>
+
             Context:
             {context}
         """}
@@ -79,28 +81,26 @@ def generate_quiz_questions_with_rag(query, num_questions=5):
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=messages,
-            max_tokens=1000,  # Increased to allow more content
+            max_tokens=1000,
             temperature=0.7,
         )
         quiz_text = response.choices[0].message.content.strip()
 
-        # Split questions into a list
+        # Extract questions
         questions = quiz_text.split("\n\n")
-
         parsed_questions = []
         for question in questions:
-            if "Correct Answer: " in question and "Explanation:" in question:
-                question_text = question.split("Correct Answer: ")[0].strip()
-                correct_answer = question.split("Correct Answer: ")[-1].split("Explanation:")[0].strip().replace("**", "").strip()
+            if "Correct Answer:" in question and "Explanation:" in question:
+                question_text = question.split("Correct Answer:")[0].strip()
+                correct_answer = question.split("Correct Answer:")[-1].split("Explanation:")[0].strip()
                 explanation = question.split("Explanation:")[-1].strip()
                 options = ["A", "B", "C", "D"]
                 parsed_questions.append((question_text, options, correct_answer, explanation))
-        
-        # Return exactly the number of requested questions
-        return parsed_questions[:num_questions]
 
+        return parsed_questions[:num_questions]
     except Exception as e:
         return [("Error: Failed to generate quiz.", [], "N/A", "No explanation available.")]
+
 
 
 # Gradio Chatbot and Quiz Interface
@@ -116,12 +116,11 @@ def main():
             upload_status = gr.Textbox(label="Upload Status", interactive=False)
 
         def process_upload(file):
-            global index, knowledge_base
-            index.reset()
+            global knowledge_base
             knowledge_base = []
             if file:
-                preprocess_pdf_to_knowledge_base(file.name)
-            return "Knowledge base loaded successfully!"
+                return preprocess_pdf_to_knowledge_base(file.name)
+            return "Error: No file uploaded!"
 
         upload_button = gr.Button("Load Knowledge Base")
         upload_button.click(process_upload, inputs=[file_upload], outputs=upload_status)
@@ -141,15 +140,25 @@ def main():
         # Function to handle answer submission 
         def submit_answer(user_answer):
             global current_question, quiz_data, answer_submitted
+
             if current_question < len(quiz_data):
                 question_text, options, correct_answer, explanation = quiz_data[current_question]
 
-                # Ensure comparison is case-insensitive and formatted correctly
-                is_correct = user_answer.strip().upper() == correct_answer.strip().upper()
+                # Extract only the first letter (A, B, C, D) from the selected option
+                normalized_user_answer = user_answer.strip()[0].upper()
+                normalized_correct_answer = correct_answer.strip().upper()
+
+                # Debugging: Print both values
+                print(f"User Selected: {user_answer}, Extracted: {normalized_user_answer}, Correct Answer: {normalized_correct_answer}")
+
+                # Compare extracted letter with correct answer
+                is_correct = normalized_user_answer == normalized_correct_answer
+
                 feedback_msg = "✅ Correct!" if is_correct else f"❌ Incorrect. The correct answer is: {correct_answer}\n\n💡 Explanation: {explanation}"
 
                 answer_submitted = True  # Enable next question button
                 return feedback_msg, gr.update(interactive=False), gr.update(interactive=True)
+
             else:
                 return "No more questions!", gr.update(interactive=False), gr.update(interactive=False)
 
@@ -157,7 +166,7 @@ def main():
 
         # Function to handle quiz progression
         def next_question():
-            global current_question, quiz_data, answer_submitted
+            global quiz_data, current_question, answer_submitted
 
             if answer_submitted and current_question < len(quiz_data) - 1:
                 current_question += 1
@@ -215,7 +224,7 @@ def main():
 
             if "quiz" in query.lower():
                 num_questions = int(query.split(" ")[2]) if query.split(" ")[2].isdigit() else 5
-                quiz_data.clear()
+                quiz_data.clear()  # ✅ Ensure old quiz data is removed
                 quiz_data.extend(generate_quiz_questions_with_rag(query, num_questions))
                 current_question = 0
                 answer_submitted = False
