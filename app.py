@@ -11,6 +11,8 @@ from openai import OpenAI
 # Load environment variables
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+print(os.getenv("OPENAI_API_KEY"))
+
 
 # Global Variables
 quiz_data = []  # Store quiz questions
@@ -26,8 +28,9 @@ vectorstore = Chroma(persist_directory="./chroma_db", embedding_function=embeddi
 def preprocess_pdf_to_knowledge_base(pdf_path):
     """Loads a PDF, extracts text, splits it, and stores in ChromaDB"""
     try:
-        loader = PyPDFLoader(pdf_path)
+        loader = PyPDFLoader("Network Security Defence.pdf")
         documents = loader.load()
+        print(documents)
 
         # Split text into chunks
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
@@ -106,7 +109,7 @@ def generate_quiz_questions_with_rag(query, num_questions=5):
 # Gradio Chatbot and Quiz Interface
 def main():
     with gr.Blocks() as demo:
-        gr.Markdown("## Knowledge Base Chatbot with Interactive Quiz Mode")
+        gr.Markdown("## I am your SmartBot !")
 
         chatbot = gr.Chatbot(label="Knowledge Base Bot")
 
@@ -154,7 +157,7 @@ def main():
                 # Compare extracted letter with correct answer
                 is_correct = normalized_user_answer == normalized_correct_answer
 
-                feedback_msg = "✅ Correct!" if is_correct else f"❌ Incorrect. The correct answer is: {correct_answer}\n\n💡 Explanation: {explanation}"
+                feedback_msg = "Correct!" if is_correct else f"Incorrect. The correct answer is: {correct_answer}\n\n💡 Explanation: {explanation}"
 
                 answer_submitted = True  # Enable next question button
                 return feedback_msg, gr.update(interactive=False), gr.update(interactive=True)
@@ -224,7 +227,7 @@ def main():
 
             if "quiz" in query.lower():
                 num_questions = int(query.split(" ")[2]) if query.split(" ")[2].isdigit() else 5
-                quiz_data.clear()  # ✅ Ensure old quiz data is removed
+                quiz_data.clear() 
                 quiz_data.extend(generate_quiz_questions_with_rag(query, num_questions))
                 current_question = 0
                 answer_submitted = False
