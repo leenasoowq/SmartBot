@@ -19,7 +19,6 @@ quiz_data = []  # Store quiz questions
 current_question = 0  # Track the current question
 answer_submitted = False  # Prevent skipping ahead before submitting
 
-# Initialize Embeddings Model for LangChain
 embedding_model = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
 # Initialize ChromaDB
@@ -82,7 +81,7 @@ def generate_quiz_questions_with_rag(query, num_questions=5):
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="text-embedding-3-large",
             messages=messages,
             max_tokens=1000,
             temperature=0.7,
@@ -104,9 +103,6 @@ def generate_quiz_questions_with_rag(query, num_questions=5):
     except Exception as e:
         return [("Error: Failed to generate quiz.", [], "N/A", "No explanation available.")]
 
-
-
-# Gradio Chatbot and Quiz Interface
 def main():
     with gr.Blocks() as demo:
         gr.Markdown("## I am your SmartBot !")
@@ -151,7 +147,6 @@ def main():
                 normalized_user_answer = user_answer.strip()[0].upper()
                 normalized_correct_answer = correct_answer.strip().upper()
 
-                # Debugging: Print both values
                 print(f"User Selected: {user_answer}, Extracted: {normalized_user_answer}, Correct Answer: {normalized_correct_answer}")
 
                 # Compare extracted letter with correct answer
