@@ -1,34 +1,47 @@
-Hi people 
+# 🧠 SmartBot: "Because Googling Everything is Too Mainstream!" 🤖😂  
 
-1. Install Dependencies: Run the following command to install the required libraries:
+Welcome to **SmartBot**, your **AI-powered** academic assistant! This app helps you **upload PDFs, query relevant information**, and **generate interactive quizzes** based on your study materials.  
+
+---
+
+## 🚀 Features  
+✅ Upload multiple PDFs and extract knowledge  
+✅ Ask questions and get AI-generated answers  
+✅ Generate quizzes based on uploaded documents  
+✅ Interactive quiz mode with multiple-choice questions  
+
+---
+
+## 🛠️ Installation  
+
+### 1️⃣ Clone the Repository  
+```bash
+git clone https://github.com/yourusername/SmartBot.git
+cd SmartBot
+```
+
+### 2️⃣ Create a Virtual Environment
+```bash
+python -m venv venv
+source venv/bin/activate  # MacOS/Linux
+venv\Scripts\activate     # Windows
+```
+
+### 3️⃣ Install Dependencies
+```bash
 pip install -r requirements.txt
+```
 
-2. Set up the openai api key (probably later part of the project we can start sharing api accounts so we can utilise to $300)
-   1. Get Your OpenAI API Key:
-      
-      Sign up or log in to OpenAI at https://platform.openai.com/.
-      Go to the API Keys section and generate a new API key.
-      Create a .env File:
+### 🔑 Environment Variables
+Create a .env file in the root directory and add your OpenAI API key:
+```bash
+OPENAI_API_KEY=your_openai_api_key
+```
 
-      In your project folder, create a file named .env.
-      Add the following content to the file:
-      OPENAI_API_KEY=your_openai_api_key
-      Replace your_openai_api_key with your actual OpenAI API key.
-
-3. To run the code in terminal:
-   python app.py
-
-4. Brief Summary:
-   1. Input: PDF file, text file, URL
-   2. set number of quiz questions
-   3. set difficulty level
-
-
-
-
-
-
-
+### 🏃 Running the Application
+```bash
+streamlit run app.py
+```
 
 
 ## **Objective of the Project**
