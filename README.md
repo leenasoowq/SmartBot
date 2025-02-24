@@ -1,4 +1,4 @@
-# 🧠 SmartBot: "Because Googling Everything is Too Mainstream!" 🤖😂  
+# 🧠 SmartBot: Because Googling Everything is Too Mainstream! 🤖😂  
 
 Welcome to **SmartBot**, your **AI-powered** academic assistant! This app helps you **upload PDFs, query relevant information**, and **generate interactive quizzes** based on your study materials.  
 
