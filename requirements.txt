@@ -1,9 +1,7 @@
 openai
-PyPDF2
-pdfplumber
-requests
-beautifulsoup4
+pypdf
 python-dotenv
-gradio
-fastapi
-uvicorn
+langchain-community
+chromadb
+python 3.11.9
+streamlit

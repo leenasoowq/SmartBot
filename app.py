@@ -1,249 +1,119 @@
-from langchain.document_loaders import PyPDFLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.vectorstores import Chroma
-from langchain.embeddings import HuggingFaceEmbeddings
-
 import os
-import gradio as gr
+import streamlit as st
+from langchain_community.document_loaders import PyPDFLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import Chroma
+from langchain_community.embeddings import OpenAIEmbeddings
 from dotenv import load_dotenv
 from openai import OpenAI
 
 # Load environment variables
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-print(os.getenv("OPENAI_API_KEY"))
 
-
-# Global Variables
-quiz_data = []  # Store quiz questions
-current_question = 0  # Track the current question
-answer_submitted = False  # Prevent skipping ahead before submitting
-
-embedding_model = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-
-# Initialize ChromaDB
+# Initialise OpenAI Embeddings & ChromaDB
+embedding_model = OpenAIEmbeddings(model="text-embedding-3-large")
 vectorstore = Chroma(persist_directory="./chroma_db", embedding_function=embedding_model)
 
-def preprocess_pdf_to_knowledge_base(pdf_path):
-    """Loads a PDF, extracts text, splits it, and stores in ChromaDB"""
+# Initialise session state
+if "processed_files" not in st.session_state:
+    st.session_state.processed_files = []
+if "conversation_history" not in st.session_state:
+    st.session_state.conversation_history = []
+
+# Process Multiple PDFs
+def preprocess_pdfs(files):
+    new_files = [file for file in files if file.name not in st.session_state.processed_files]
+
+    if not new_files:
+        return "⚠️ No new PDFs detected. Using existing knowledge base."
+
     try:
-        loader = PyPDFLoader("Network Security Defence.pdf")
-        documents = loader.load()
-        print(documents)
+        all_docs = []
+        for file in new_files:
+            with open(f"./{file.name}", "wb") as f:
+                f.write(file.getbuffer())  
 
-        # Split text into chunks
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
-        docs = text_splitter.split_documents(documents)
+            loader = PyPDFLoader(f"./{file.name}")
+            documents = loader.load()
 
-        # Store embeddings in Chroma
-        vectorstore.add_documents(docs)
+            # Split text into chunks
+            text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
+            docs = text_splitter.split_documents(documents)
+            all_docs.extend(docs)
+
+        # Store embeddings in ChromaDB
+        vectorstore.add_documents(all_docs)
+        print(f"✅ {len(all_docs)} document chunks added to ChromaDB")
         vectorstore.persist()
-        return "Knowledge base loaded successfully!"
+
+        # Remember processed files
+        st.session_state.processed_files.extend([file.name for file in new_files])
+
+        return f"✅ {len(new_files)} new PDFs processed successfully!"
     except Exception as e:
-        return f"Error processing PDF: {e}"
+        return f"❌ Error processing PDFs: {e}"
 
-
-
-# Function to retrieve relevant chunks from the knowledge base
+# Retrieve relevant text from ChromaDB
 def retrieve_relevant_chunks(query, top_k=3):
-    """Retrieve the most relevant text chunks from ChromaDB."""
     try:
         results = vectorstore.similarity_search(query, k=top_k)
         return [doc.page_content for doc in results]
     except Exception as e:
-        return [f"Error retrieving documents: {e}"]
+        return [f"❌ Error retrieving documents: {e}"]
 
+# Process user query
+def process_query():
+    user_input = st.session_state.user_query.strip()
+    if user_input and user_input.lower() != "quiz":
+        retrieved_chunks = retrieve_relevant_chunks(user_input)
+        context = "\n\n".join(retrieved_chunks)
 
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant that answers questions."},
+            {"role": "user", "content": f"Based on the following context, answer the query:\n\n{context}\n\nQuery: {user_input}"}
+        ]
 
-# Function to generate quiz questions dynamically
-def generate_quiz_questions_with_rag(query, num_questions=5):
-    retrieved_chunks = retrieve_relevant_chunks(query)
-    context = "\n\n".join(retrieved_chunks)
-
-    messages = [
-        {"role": "system", "content": "You are a helpful assistant that generates multiple-choice quiz questions."},
-        {"role": "user", "content": f"""
-            Generate exactly {num_questions} multiple-choice quiz questions based on the following context.
-
-            ### Format:
-            - Question: <question>
-            - A) <option1>
-            - B) <option2>
-            - C) <option3>
-            - D) <option4>
-            - Correct Answer: <correct_option>
-            - Explanation: <why correct>
-
-            Context:
-            {context}
-        """}
-    ]
-
-    try:
-        response = client.chat.completions.create(
-            model="text-embedding-3-large",
-            messages=messages,
-            max_tokens=1000,
-            temperature=0.7,
-        )
-        quiz_text = response.choices[0].message.content.strip()
-
-        # Extract questions
-        questions = quiz_text.split("\n\n")
-        parsed_questions = []
-        for question in questions:
-            if "Correct Answer:" in question and "Explanation:" in question:
-                question_text = question.split("Correct Answer:")[0].strip()
-                correct_answer = question.split("Correct Answer:")[-1].split("Explanation:")[0].strip()
-                explanation = question.split("Explanation:")[-1].strip()
-                options = ["A", "B", "C", "D"]
-                parsed_questions.append((question_text, options, correct_answer, explanation))
-
-        return parsed_questions[:num_questions]
-    except Exception as e:
-        return [("Error: Failed to generate quiz.", [], "N/A", "No explanation available.")]
-
-def main():
-    with gr.Blocks() as demo:
-        gr.Markdown("## I am your SmartBot !")
-
-        chatbot = gr.Chatbot(label="Knowledge Base Bot")
-
-        # Upload Section
-        with gr.Row():
-            file_upload = gr.File(label="Upload File (PDF or Text)", file_types=[".pdf", ".txt"], visible=True)
-            upload_status = gr.Textbox(label="Upload Status", interactive=False)
-
-        def process_upload(file):
-            global knowledge_base
-            knowledge_base = []
-            if file:
-                return preprocess_pdf_to_knowledge_base(file.name)
-            return "Error: No file uploaded!"
-
-        upload_button = gr.Button("Load Knowledge Base")
-        upload_button.click(process_upload, inputs=[file_upload], outputs=upload_status)
-
-        # Chat Section
-        with gr.Row():
-            user_input = gr.Textbox(label="Your Query", placeholder="Ask a question or request a quiz.")
-            submit_button = gr.Button("Submit")
-
-        # Quiz Interaction Section
-        quiz_question = gr.Textbox(label="Current Question", interactive=False)
-        answer_choices = gr.Radio(label="Your Answer", choices=["A", "B", "C", "D"], interactive=True)
-        submit_answer_btn = gr.Button("Submit Answer", interactive=True)
-        feedback = gr.Textbox(label="Feedback", interactive=False)
-        next_btn = gr.Button("Next Question", interactive=False)
-
-        # Function to handle answer submission 
-        def submit_answer(user_answer):
-            global current_question, quiz_data, answer_submitted
-
-            if current_question < len(quiz_data):
-                question_text, options, correct_answer, explanation = quiz_data[current_question]
-
-                # Extract only the first letter (A, B, C, D) from the selected option
-                normalized_user_answer = user_answer.strip()[0].upper()
-                normalized_correct_answer = correct_answer.strip().upper()
-
-                print(f"User Selected: {user_answer}, Extracted: {normalized_user_answer}, Correct Answer: {normalized_correct_answer}")
-
-                # Compare extracted letter with correct answer
-                is_correct = normalized_user_answer == normalized_correct_answer
-
-                feedback_msg = "Correct!" if is_correct else f"Incorrect. The correct answer is: {correct_answer}\n\n💡 Explanation: {explanation}"
-
-                answer_submitted = True  # Enable next question button
-                return feedback_msg, gr.update(interactive=False), gr.update(interactive=True)
-
-            else:
-                return "No more questions!", gr.update(interactive=False), gr.update(interactive=False)
-
-        submit_answer_btn.click(submit_answer, inputs=[answer_choices], outputs=[feedback, submit_answer_btn, next_btn])
-
-        # Function to handle quiz progression
-        def next_question():
-            global quiz_data, current_question, answer_submitted
-
-            if answer_submitted and current_question < len(quiz_data) - 1:
-                current_question += 1
-                question_text, options, correct_answer, explanation = quiz_data[current_question]
-                answer_submitted = False  # Reset for new question
-                return question_text, options, "", gr.update(interactive=True), gr.update(interactive=False)
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages,
+                max_tokens=300,
+                temperature=0.7,
+            )
+            bot_response = response.choices[0].message.content.strip()
             
-            elif len(quiz_data) == 1:  # Stop if only one question exists
-                return "No more questions available!", [], "Quiz finished!", gr.update(interactive=False), gr.update(interactive=False)
-            
-            else:
-                return "Quiz completed!", [], "Quiz finished!", gr.update(interactive=False), gr.update(interactive=False)
+            # Maintain conversation history
+            st.session_state.conversation_history.append((user_input, bot_response))
+            st.session_state.user_query = ""  # Clear input after processing
+        except Exception as e:
+            st.session_state.conversation_history.append((user_input, f"❌ Error: {e}"))
 
-        next_btn.click(next_question, outputs=[quiz_question, answer_choices, feedback, submit_answer_btn, next_btn])
+# UI
+st.title("🤖 Your academic weapon: SmartBot")
 
-        def handle_prompt(query):
-            retrieved_chunks = retrieve_relevant_chunks(query)
-            context = "\n\n".join(retrieved_chunks)
+# Upload PDFs
+uploaded_files = st.file_uploader("Upload PDFs (Multiple Supported)", type=["pdf"], accept_multiple_files=True)
+if uploaded_files:
+    upload_status = preprocess_pdfs(uploaded_files)
+    st.success(upload_status)
 
-            # Check if the user requested a summary
-            if "summarize" in query.lower() or "summarise" in query.lower():
-                messages = [
-                    {"role": "system", "content": "You are an AI assistant that summarizes documents."},
-                    {"role": "user", "content": f"Summarize the following text:\n\n{context}"}
-                ]
-            else:
-                messages = [
-                    {"role": "system", "content": "You are a helpful assistant that answers questions."},
-                    {"role": "user", "content": f"""
-                        Based on the following context, answer the query:
+# Display chat history
+st.subheader("🗨️ Chat History")
+for user_msg, bot_msg in st.session_state.conversation_history:
+    st.write(f"**🧑‍💻 You:** {user_msg}")
+    st.write(f"🤖 **ChatBot:** {bot_msg}")
 
-                        Context:
-                        {context}
+st.subheader("💬 Enter your query")
 
-                        Query:
-                        {query}
-                    """}
-                ]
+# User input field (stores in session state)
+st.text_input(
+    "Type your question or type 'quiz' to start:",
+    key="user_query",
+    on_change=process_query  # Calls process_query() when Enter is pressed
+)
 
-            try:
-                response = client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=messages,
-                    max_tokens=300,  # Set a reasonable limit for summaries
-                    temperature=0.7,
-                )
-                return response.choices[0].message.content.strip()
-            except Exception as e:
-                return f"Error: {e}"
+# Check if the user wants to switch to the quiz
+if "user_query" in st.session_state and st.session_state.user_query.lower() == "quiz":
+    st.page_link("pages/quiz.py")
 
-
-        # Function to handle user queries with OpenAI
-        def chat_response(history, query):
-            global quiz_data, current_question, answer_submitted
-
-            if "quiz" in query.lower():
-                num_questions = int(query.split(" ")[2]) if query.split(" ")[2].isdigit() else 5
-                quiz_data.clear() 
-                quiz_data.extend(generate_quiz_questions_with_rag(query, num_questions))
-                current_question = 0
-                answer_submitted = False
-
-                if quiz_data:
-                    return history + [(query, "Quiz started!")], quiz_data[0][0], quiz_data[0][1], "", gr.update(interactive=True), gr.update(interactive=False)
-                else:
-                    return history + [(query, "Failed to generate quiz.")], "No questions available.", [], "", gr.update(interactive=False), gr.update(interactive=False)
-
-            elif "summarize" in query.lower() or "summarise" in query.lower():
-                summary = handle_prompt(query)
-                return history + [(query, summary)], "", [], "", gr.update(interactive=False), gr.update(interactive=False)
-
-            else:
-                response = handle_prompt(query)
-                return history + [(query, response)], "", [], "", gr.update(interactive=False), gr.update(interactive=False)
-
-
-        submit_button.click(chat_response, inputs=[chatbot, user_input], outputs=[chatbot, quiz_question, answer_choices, feedback, submit_answer_btn, next_btn])
-
-    demo.launch()
-
-if __name__ == "__main__":
-    main()
