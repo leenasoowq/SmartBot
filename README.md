@@ -16,7 +16,7 @@ Welcome to **SmartBot**, your **AI-powered** academic assistant! This app helps 
 
 ### 1️⃣ Clone the Repository  
 ```bash
-git clone https://github.com/yourusername/SmartBot.git](https://github.com/leenasoowq/SmartBot.git
+git clone https://github.com/leenasoowq/SmartBot.git
 cd SmartBot
 ```
 
