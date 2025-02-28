@@ -1,9 +1,11 @@
 import os
+import numpy as np
 import streamlit as st
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import OpenAIEmbeddings
+from sklearn.metrics.pairwise import cosine_similarity
 from dotenv import load_dotenv
 from openai import OpenAI
 
@@ -51,7 +53,7 @@ def preprocess_pdfs(files):
             documents = loader.load()
 
             # Ensure text is split properly
-            text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
+            text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
             docs = text_splitter.split_documents(documents)
             all_docs.extend(docs)
 
@@ -67,7 +69,7 @@ def preprocess_pdfs(files):
         return f"Error processing PDFs: {e}"
 
 # Retrieve relevant text from ChromaDB
-def retrieve_relevant_chunks(query, top_k=15):
+def retrieve_relevant_chunks(query, top_k=20):
     try:
         results = vectorstore.similarity_search(query, k=top_k)
         return [doc.page_content for doc in results]
@@ -83,7 +85,7 @@ def process_query():
         st.switch_page("pages/quiz.py")
         return  # Stop further processing
 
-    if user_input.lower() == "summarize":
+    elif user_input.lower() == "summarize":
         if not st.session_state.processed_files:
             st.session_state.conversation_history.append(("summarize", "No PDFs have been uploaded. Please upload a file first."))
             return
@@ -94,21 +96,24 @@ def process_query():
             context = "\n\n".join(retrieved_chunks)
 
             messages = [
-                {"role": "system", "content": "You are an academic assistant skilled at summarizing documents."},
+                {"role": "system", "content": "You are a knowledgeable assistant who explains concepts using structured academic reasoning. Always base your answers on the provided context and avoid generating generic or off-topic responses."},
                 {"role": "user", "content": f"""
-                    Summarize the contents of **{file}** in a structured format:
+                    Answer the question using a structured academic approach.
 
-                    ### 📌 Overview
-                    - What is this document about?
+                    ### 📌 Introduction
+                    - **Briefly introduce** the key concept related to the question.
 
-                    ### 📖 Key Topics
-                    - List the most important topics covered.
+                    ### 📖 Detailed Explanation
+                    - **Break down** the concept step by step.
+
+                    ### 🌍 Real-World Analogy
+                    - **Provide an analogy** or example.
 
                     ### 🎯 Key Takeaways
-                    - Provide a bullet-point summary of the most important lessons from the document.
+                    - **Summarize** the most important points.
 
-                    **Extracted Content:**  
-                    {context}
+                    **Question:** {user_input}  
+                    **Context:** {context}  
                 """}
             ]
 
@@ -117,11 +122,11 @@ def process_query():
                     model="gpt-4o-mini",
                     messages=messages,
                     max_tokens=1500,
-                    temperature=0.7,
+                    temperature=0.3,
                 )
                 summary = response.choices[0].message.content.strip()
-                summaries.append(f"### Summary of {file}\n{summary}")
-
+                confidence_score = estimate_confidence(response, context)  # Pass context here
+                summaries.append(f"### Summary of {file}\n{summary}\n\n**Confidence Score:** {confidence_score:.2f}%")
             except Exception as e:
                 summaries.append(f"Error summarizing {file}: {e}")
 
@@ -130,44 +135,56 @@ def process_query():
         st.session_state.user_query = ""  # Clear input after processing
         return
 
-    # Standard processing for other queries
-    retrieved_chunks = retrieve_relevant_chunks(user_input)
-    context = "\n\n".join(retrieved_chunks)
+    else:
+        # Standard processing for other queries
+        retrieved_chunks = retrieve_relevant_chunks(user_input)
+        context = "\n\n".join(retrieved_chunks)
 
-    messages = [
-        {"role": "system", "content": "You are a knowledgeable assistant who explains concepts using structured academic reasoning."},
-        {"role": "user", "content": f"""
-            Answer the question using a structured academic approach.
+        messages = [
+            {"role": "system", "content": "You are a knowledgeable assistant who explains concepts using structured academic reasoning."},
+            {"role": "user", "content": f"""
+                Answer the question using a structured academic approach.
 
-            ### 📌 Introduction
-            - **Briefly introduce** the key concept related to the question.
+                ### 📌 Introduction
+                - **Briefly introduce** the key concept related to the question.
 
-            ### 📖 Detailed Explanation
-            - **Break down** the concept step by step.
+                ### 📖 Detailed Explanation
+                - **Break down** the concept step by step.
 
-            ### 🌍 Real-World Analogy
-            - **Provide an analogy** or example.
+                ### 🌍 Real-World Analogy
+                - **Provide an analogy** or example.
 
-            ### 🎯 Key Takeaways
-            - **Summarize** the most important points.
+                ### 🎯 Key Takeaways
+                - **Summarize** the most important points.
 
-            **Question:** {user_input}  
-            **Context:** {context}  
-        """}
-    ]
+                **Question:** {user_input}  
+                **Context:** {context}  
+            """}
+        ]
 
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=messages,
-            max_tokens=1500,
-            temperature=0.7,
-        )
-        bot_response = response.choices[0].message.content.strip()
-        st.session_state.conversation_history.append((user_input, bot_response))
-        st.session_state.user_query = ""
-    except Exception as e:
-        st.session_state.conversation_history.append((user_input, f"Error: {e}"))
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages,
+                max_tokens=1500,
+                temperature=0.7,
+            )
+            bot_response = response.choices[0].message.content.strip()
+            confidence_score = estimate_confidence(response, context)  
+            st.session_state.conversation_history.append((user_input, f"{bot_response}\n\n**Confidence Score:** {confidence_score:.2f}%"))
+            st.session_state.user_query = ""
+        except Exception as e:
+            st.session_state.conversation_history.append((user_input, f"Error: {e}"))
+
+def estimate_confidence(response, context):
+    response_embedding = embedding_model.embed_query(response.choices[0].message.content)
+    context_embedding = embedding_model.embed_query(context)
+    
+    similarity = cosine_similarity([response_embedding], [context_embedding])[0][0]
+    
+    # Adjust scaling for better confidence scores
+    confidence_score = min(100.0, max(0.0, (similarity + 1) * 50)) 
+    return confidence_score
 
 # UI
 st.title("🤖 Your academic weapon: SmartBot")
