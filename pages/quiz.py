@@ -35,21 +35,21 @@ def retrieve_relevant_chunks(query, top_k=3):
         results = vectorstore.similarity_search(query, k=top_k)
         return [doc.page_content for doc in results]
     except Exception as e:
-        return [f"❌ Error retrieving documents: {e}"]
+        return [f"Error retrieving documents: {e}"]
 
 # Generate quiz questions
 def generate_quiz_questions(query, difficulty, num_questions=5):
     retrieved_chunks = retrieve_relevant_chunks(query)
-    print(f"🔍 Retrieved Chunks from ChromaDB: {retrieved_chunks}")
+    print(f"Retrieved Chunks from ChromaDB: {retrieved_chunks}")
 
     context = "\n\n".join(retrieved_chunks)
 
     messages = [
-        {"role": "system", "content": f"You are a helpful assistant that generates {difficulty}-level multiple-choice quiz questions based on the provided knowledge."},
+        {"role": "system", "content": f"You are an academic quiz assistant generating {difficulty}-level multiple-choice quiz questions based on provided knowledge."},
         {"role": "user", "content": f"""
-            Generate exactly {num_questions} {difficulty}-level multiple-choice quiz questions based on the following slides content.
+            Generate exactly {num_questions} {difficulty}-level multiple-choice quiz questions using the provided knowledge.
 
-            ### Slides Content:
+            ### Knowledge Context:
             {context}
 
             ### Format:
@@ -59,7 +59,7 @@ def generate_quiz_questions(query, difficulty, num_questions=5):
             C) <option_3>
             D) <option_4>
             Correct Answer: <correct_option_letter>
-            Explanation: <why_correct>
+            Explanation: <explanation_text>
         """}
     ]
 
@@ -102,15 +102,15 @@ def generate_quiz_questions(query, difficulty, num_questions=5):
 
         # Ensure we got valid questions
         if len(parsed_questions) < num_questions:
-            return [("❌ Error: Failed to generate valid quiz questions.", [], "N/A", "No explanation available.")]
+            return [("Error: Failed to generate valid quiz questions.", [], "N/A", "No explanation available.")]
 
         return parsed_questions[:num_questions]
 
     except Exception as e:
         print("Quiz generation error:", e)
-        return [("❌ Error: Failed to generate quiz.", [], "N/A", "No explanation available.")]
+        return [("Error: Failed to generate quiz.", [], "N/A", "No explanation available.")]
     
-# ✅ Quiz mode UI
+# Quiz mode UI
 st.title("🎓 Interactive Quiz Mode")
 
 if st.session_state.quiz_step == "select_options":
@@ -139,9 +139,9 @@ elif st.session_state.quiz_step == "in_progress":
 
         st.session_state.selected_answer = selected_letter
         if st.session_state.selected_answer == correct_answer:
-            st.session_state.feedback = "✅ Correct!"
+            st.session_state.feedback = "Correct!"
         else:
-            st.session_state.feedback = f"❌ Incorrect. The correct answer is: {correct_answer}\n💡 Explanation: {explanation}"
+            st.session_state.feedback = f"Incorrect. The correct answer is: {correct_answer}\nExplanation: {explanation}"
         st.rerun()
 
     if st.session_state.feedback:
