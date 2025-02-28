@@ -27,25 +27,31 @@ if "selected_answer" not in st.session_state:
     st.session_state.selected_answer = None
 if "feedback" not in st.session_state:
     st.session_state.feedback = ""
+if "detailed_explanation" not in st.session_state:
+    st.session_state.detailed_explanation = ""
+if "uploaded_pdfs" not in st.session_state:
+    st.session_state.uploaded_pdfs = []
+if "selected_pdf" not in st.session_state:
+    st.session_state.selected_pdf = None
 
 # Retrieve knowledge from ChromaDB before generating quiz
-def retrieve_relevant_chunks(query, top_k=3):
-    """Fetch relevant information from ChromaDB before generating quiz questions."""
+def retrieve_relevant_chunks(pdf_name, top_k=3):
+    """Fetch relevant information from the selected PDF stored in ChromaDB."""
     try:
-        results = vectorstore.similarity_search(query, k=top_k)
+        results = vectorstore.similarity_search(pdf_name, k=top_k)
         return [doc.page_content for doc in results]
     except Exception as e:
         return [f"Error retrieving documents: {e}"]
 
 # Generate quiz questions
-def generate_quiz_questions(query, difficulty, num_questions=5):
-    retrieved_chunks = retrieve_relevant_chunks(query)
-    print(f"Retrieved Chunks from ChromaDB: {retrieved_chunks}")
+def generate_quiz_questions(pdf_name, difficulty, num_questions=5):
+    retrieved_chunks = retrieve_relevant_chunks(pdf_name)
+    print(f"Retrieved Chunks from ChromaDB for {pdf_name}: {retrieved_chunks}")
 
     context = "\n\n".join(retrieved_chunks)
 
     messages = [
-        {"role": "system", "content": f"You are an academic quiz assistant generating {difficulty}-level multiple-choice quiz questions based on provided knowledge."},
+        {"role": "system", "content": f"You are an academic quiz assistant generating {difficulty}-level questions based on provided knowledge."},
         {"role": "user", "content": f"""
             Generate exactly {num_questions} {difficulty}-level multiple-choice quiz questions using the provided knowledge.
 
@@ -113,43 +119,68 @@ def generate_quiz_questions(query, difficulty, num_questions=5):
 # Quiz mode UI
 st.title("🎓 Interactive Quiz Mode")
 
+# Sidebar for PDF selection and upload
+st.sidebar.title("PDF Selection")
+
+# Use the processed files from app.py if available
+if "processed_files" in st.session_state:
+    st.session_state.uploaded_pdfs = st.session_state.processed_files
+
+# Allow user to upload additional PDFs
+additional_files = st.sidebar.file_uploader("Upload additional PDFs", accept_multiple_files=True, type=["pdf"])
+if additional_files:
+    st.session_state.uploaded_pdfs.extend([file.name for file in additional_files])
+
+# Select PDF for quiz generation
+if st.session_state.uploaded_pdfs:
+    st.session_state.selected_pdf = st.sidebar.selectbox("Select PDF for quiz generation", st.session_state.uploaded_pdfs)
+
 if st.session_state.quiz_step == "select_options":
-    st.subheader("🎯 Select Quiz Options")
+    st.subheader("Select Quiz Options")
     st.session_state.num_questions = st.slider("How many questions?", 1, 10, 5)
     st.session_state.selected_difficulty = st.radio("Select difficulty:", ["Easy", "Medium", "Hard"])
 
     if st.button("Start Quiz"):
-        st.session_state.quiz_data = generate_quiz_questions("firewall", st.session_state.selected_difficulty, st.session_state.num_questions)
-        st.session_state.quiz_step = "in_progress"
-        st.session_state.current_question = 0
-        st.session_state.feedback = ""
-        st.rerun()
+        if st.session_state.selected_pdf:
+            st.session_state.quiz_data = generate_quiz_questions(st.session_state.selected_pdf, st.session_state.selected_difficulty, st.session_state.num_questions)
+            st.session_state.quiz_step = "in_progress"
+            st.session_state.current_question = 0
+            st.session_state.feedback = ""
+            st.session_state.detailed_explanation = ""
+            st.rerun()
+        else:
+            st.error("Please select a PDF file to generate the quiz.")
 
 elif st.session_state.quiz_step == "in_progress":
     st.subheader(f"Question {st.session_state.current_question + 1} of {st.session_state.num_questions}")
     question, options, correct_answer, explanation = st.session_state.quiz_data[st.session_state.current_question]
     st.write(f"**{question}**")
 
-    selected_answer = st.radio("Select your answer:", options, key=f"question_{st.session_state.current_question}")
+    option_labels = ["A", "B", "C", "D"]
+    labeled_options = [f"{label}) {option}" for label, option in zip(option_labels, options)]
+    selected_answer = st.radio("Select your answer:", labeled_options, key=f"question_{st.session_state.current_question}")
 
     if st.button("Submit Answer"):
         # Convert selected answer to corresponding letter 
-        selected_index = options.index(selected_answer)
-        selected_letter = ["A", "B", "C", "D"][selected_index]
+        selected_letter = selected_answer.split(") ")[0]
 
         st.session_state.selected_answer = selected_letter
         if st.session_state.selected_answer == correct_answer:
             st.session_state.feedback = "Correct!"
+            st.session_state.detailed_explanation = f"Well done! {correct_answer} is the right choice because: {explanation}"
         else:
-            st.session_state.feedback = f"Incorrect. The correct answer is: {correct_answer}\nExplanation: {explanation}"
+            st.session_state.feedback = f"Incorrect. The correct answer is: {correct_answer}."
+            st.session_state.detailed_explanation = f"Your choice ({selected_answer}) is incorrect because it does not align with the key concept. The correct answer ({correct_answer}) is correct because: {explanation}"
         st.rerun()
 
     if st.session_state.feedback:
         st.write(st.session_state.feedback)
+        st.write(st.session_state.detailed_explanation)
         if st.session_state.current_question < st.session_state.num_questions - 1:
             if st.button("Next Question"):
                 st.session_state.current_question += 1
                 st.session_state.feedback = ""
+                st.session_state.detailed_explanation = ""
                 st.rerun()
 
         if st.button("Exit Quiz"):
