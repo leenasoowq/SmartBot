@@ -9,6 +9,7 @@ Welcome to **SmartBot**, your **AI-powered** academic assistant! This app helps 
 ✅ Ask questions and get AI-generated answers  
 ✅ Generate quizzes based on uploaded documents  
 ✅ Interactive quiz mode with multiple-choice questions  
+✅ Transcript and translate videos/audios
 
 ---
 
