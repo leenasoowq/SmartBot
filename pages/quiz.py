@@ -30,24 +30,24 @@ if "feedback" not in st.session_state:
     st.session_state.feedback = ""
 if "detailed_explanation" not in st.session_state:
     st.session_state.detailed_explanation = ""
-if "uploaded_pdfs" not in st.session_state:
-    st.session_state.uploaded_pdfs = []
-if "selected_pdf" not in st.session_state:
-    st.session_state.selected_pdf = None
+if "uploaded_files" not in st.session_state:
+    st.session_state.uploaded_files = []
+if "selected_file" not in st.session_state:
+    st.session_state.selected_file = None
 
 # Retrieve knowledge from ChromaDB before generating quiz
-def retrieve_relevant_chunks(pdf_name, top_k=10):
-    """Fetch relevant information from the selected PDF stored in ChromaDB."""
+def retrieve_relevant_chunks(file_name, top_k=10):
+    """Fetch relevant information from the selected file stored in ChromaDB."""
     try:
-        results = vectorstore.similarity_search(pdf_name, k=top_k)
+        results = vectorstore.similarity_search(file_name, k=top_k)
         return [doc.page_content for doc in results]
     except Exception as e:
         return [f"Error retrieving documents: {e}"]
 
 # Generate quiz questions
-def generate_quiz_questions(pdf_name, difficulty, num_questions=5):
-    retrieved_chunks = retrieve_relevant_chunks(pdf_name)
-    print(f"Retrieved Chunks from ChromaDB for {pdf_name}: {retrieved_chunks}")
+def generate_quiz_questions(file_name, difficulty, num_questions=5):
+    retrieved_chunks = retrieve_relevant_chunks(file_name)
+    print(f"Retrieved Chunks from ChromaDB for {file_name}: {retrieved_chunks}")
 
     context = "\n\n".join(retrieved_chunks)
 
@@ -134,21 +134,21 @@ def calculate_explanation_confidence(explanation, context):
 # Quiz mode UI
 st.title("🎓 Interactive Quiz Mode")
 
-# Sidebar for PDF selection and upload
-st.sidebar.title("PDF Selection")
+# Sidebar for file selection and upload
+st.sidebar.title("File Selection")
 
 # Use the processed files from app.py if available
 if "processed_files" in st.session_state:
-    st.session_state.uploaded_pdfs = st.session_state.processed_files
+    st.session_state.uploaded_files = st.session_state.processed_files
 
-# Allow user to upload additional PDFs
-additional_files = st.sidebar.file_uploader("Upload additional PDFs", accept_multiple_files=True, type=["pdf"])
+# Allow user to upload additional files
+additional_files = st.sidebar.file_uploader("Upload additional files", accept_multiple_files=True, type=["pdf", "mp3", "wav", "mp4", "avi"])
 if additional_files:
-    st.session_state.uploaded_pdfs.extend([file.name for file in additional_files])
+    st.session_state.uploaded_files.extend([file.name for file in additional_files])
 
-# Select PDF for quiz generation
-if st.session_state.uploaded_pdfs:
-    st.session_state.selected_pdf = st.sidebar.selectbox("Select PDF for quiz generation", st.session_state.uploaded_pdfs)
+# Select file for quiz generation
+if st.session_state.uploaded_files:
+    st.session_state.selected_file = st.sidebar.selectbox("Select file for quiz generation", st.session_state.uploaded_files)
 
 if st.session_state.quiz_step == "select_options":
     st.subheader("Select Quiz Options")
@@ -156,15 +156,15 @@ if st.session_state.quiz_step == "select_options":
     st.session_state.selected_difficulty = st.radio("Select difficulty:", ["Easy", "Medium", "Hard"])
 
     if st.button("Start Quiz"):
-        if st.session_state.selected_pdf:
-            st.session_state.quiz_data = generate_quiz_questions(st.session_state.selected_pdf, st.session_state.selected_difficulty, st.session_state.num_questions)
+        if st.session_state.selected_file:
+            st.session_state.quiz_data = generate_quiz_questions(st.session_state.selected_file, st.session_state.selected_difficulty, st.session_state.num_questions)
             st.session_state.quiz_step = "in_progress"
             st.session_state.current_question = 0
             st.session_state.feedback = ""
             st.session_state.detailed_explanation = ""
             st.rerun()
         else:
-            st.error("Please select a PDF file to generate the quiz.")
+            st.error("Please select a file to generate the quiz.")
 
 elif st.session_state.quiz_step == "in_progress":
     st.subheader(f"Question {st.session_state.current_question + 1} of {st.session_state.num_questions}")
