@@ -1,7 +1,8 @@
-openai
-pypdf
-python-dotenv
-langchain-community
-chromadb
-python 3.11.9
 streamlit
+openai
+python-dotenv
+docx2txt
+scikit-learn
+pydub
+chromadb
+langchain_community
