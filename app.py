@@ -6,6 +6,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 # Additional import for reading Word docs
 import docx2txt
+import nbformat
 
 # Local imports
 from services.language_service import LanguageService
@@ -21,18 +22,18 @@ doc_service = DocumentService(client)
 embedding_model = doc_service.embedding_model
 
 # Initialize session state
-for key in ["processed_files", "conversation_history", "quiz_mode", "selected_file"]:
+for key in ["processed_files", "conversation_history", "quiz_mode", "selected_file", "file_categories"]:
     if key not in st.session_state:
-        # processed_files & conversation_history as lists; quiz_mode is bool; selected_file is None
         st.session_state[key] = (
             [] if key in ["processed_files", "conversation_history"] 
             else False if key == "quiz_mode"
+            else {} if key == "file_categories"
             else None
         )
 
 def preprocess_files(files):
     """
-    Upload & parse PDF, DOC, DOCX, TXT files ONLY.
+    Upload & parse PDF, DOC, DOCX, TXT, PY, and IPYNB files ONLY.
     Extract text, then embed into the vectorstore with 'file_name' metadata.
     Audio/Video are handled elsewhere (transcribe_translate.py).
     """
@@ -51,12 +52,15 @@ def preprocess_files(files):
             out_file.write(file.getbuffer())
 
         ext = file.name.lower()
+        category = "chatbot"  # Default to chatbot-only files
+        
         # 1) PDF
         if ext.endswith(".pdf"):
             pdf_docs = doc_service.process_pdf(file_path)
             for d in pdf_docs:
                 d.metadata["file_name"] = file.name
             all_docs.extend(pdf_docs)
+            category = "both"
 
         # 2) Word (doc/docx)
         elif ext.endswith((".docx", ".doc")):
@@ -69,6 +73,7 @@ def preprocess_files(files):
             for d in text_docs:
                 d.metadata["file_name"] = file.name
             all_docs.extend(text_docs)
+            category = "both"
 
         # 3) Plain text
         elif ext.endswith(".txt"):
@@ -82,10 +87,58 @@ def preprocess_files(files):
             for d in text_docs:
                 d.metadata["file_name"] = file.name
             all_docs.extend(text_docs)
+            category = "both"
+        
+        # 4) Python files
+        elif ext.endswith(".py"):
+            try:
+                with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                    text = f.read()
+            except Exception as e:
+                st.error(f"Error reading {file.name}: {e}")
+                continue
+            
+            # Automatically display extracted code
+            st.session_state["conversation_history"].append((file.name, f"```python\n{text}\n```"))
+            
+            text_docs = doc_service.process_text(text)
+            for d in text_docs:
+                d.metadata["file_name"] = file.name
+            all_docs.extend(text_docs)
+            category = "chatbot"
+        
+       # 5) Jupyter Notebook (ipynb)
+        elif ext.endswith(".ipynb"):
+            try:
+                with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                    nb_data = nbformat.read(f, as_version=4)
+                
+                extracted_code = []
+                for cell in nb_data.cells:
+                    if cell.cell_type == "code":
+                        extracted_code.append("\n".join(cell["source"]) if isinstance(cell["source"], list) else cell["source"])
+                
+                text = "\n\n".join(extracted_code)
+            except Exception as e:
+                st.error(f"Error reading {file.name}: {e}")
+                continue
+            
+            # Automatically display extracted code
+            st.session_state["conversation_history"].append((file.name, f"```python\n{text}\n```"))
+            
+            text_docs = doc_service.process_text(text)
+            for d in text_docs:
+                d.metadata["file_name"] = file.name
+            all_docs.extend(text_docs)
+            category = "chatbot"
+            
         else:
             # If user uploads unsupported type (e.g., mp3, wav, etc.):
             st.warning(f"Unsupported file type for main chatbot: {file.name}. Use transcribe_translate.py for audio/video.")
             continue
+
+        # Store file category
+        st.session_state["file_categories"][file.name] = category
 
     if all_docs:
         doc_service.add_documents_to_vectorstore(all_docs)
@@ -100,12 +153,19 @@ def retrieve_relevant_chunks(query: str, top_k: int = 20):
     f = st.session_state["selected_file"]
     if not f:
         return ["No file selected."]
-    try:
-        # Use metadata filter so we only retrieve content from the chosen file
-        results = doc_service.vectorstore.similarity_search(query, k=top_k, filter={"file_name": f})
-        return [doc.page_content for doc in results] if results else ["No relevant chunks found."]
-    except Exception as e:
-        return [f"Error retrieving chunks: {e}"]
+
+    # Ensure chatbot-relevant files are included
+    if f not in st.session_state["file_categories"]:
+        return ["File category not found."]
+    
+    category = st.session_state["file_categories"][f]  # Get category
+
+    if category in ["both", "chatbot"]:  # Include chatbot files
+        try:
+            results = doc_service.vectorstore.similarity_search(query, k=top_k, filter={"file_name": f})
+            return [doc.page_content for doc in results] if results else ["No relevant chunks found."]
+        except Exception as e:
+            return [f"Error retrieving chunks: {e}"]
 
 def estimate_confidence(llm_response: str, context_text: str) -> float:
     """
@@ -136,7 +196,7 @@ def process_user_query():
             st.session_state["conversation_history"].append(("summarise", "No file selected."))
             st.session_state.user_query = ""
             return
-        chunks = retrieve_relevant_chunks(fn)
+        chunks = retrieve_relevant_chunks(fn) if st.session_state["file_categories"].get(fn, "both") in ["both", "chatbot"] else ["This file is not available for chatbot queries."]
         context = "\n\n".join(chunks) if isinstance(chunks, list) else str(chunks)
         msgs = [
             {"role": "system", "content": "You are a knowledgeable assistant..."},
@@ -177,8 +237,8 @@ with st.sidebar:
     st.subheader("Upload Files")
     # Accept only PDF, DOC, DOCX, TXT 
     files = st.file_uploader(
-        "Upload PDF, DOC, DOCX, or TXT",
-        type=["pdf","txt","doc","docx"],
+        "Upload PDF, DOC, DOCX, TXT, PY, or IPYNB",
+        type=["pdf","txt","doc", "docx", "py", "ipynb"],
         accept_multiple_files=True
     )
     if files:
