@@ -2,3 +2,10 @@
 venv/
 datasets/
 uploads/
+.vscode/
+__pycache__/
+chroma_db/
+results/
+translated_texts/
+chat_sessions.json
+sftp.json
