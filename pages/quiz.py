@@ -40,8 +40,9 @@ if st.session_state["quiz_step"] == "select_options":
     st.session_state["num_questions"] = st.slider("Number of questions", 1, 10, 5)
     st.session_state["difficulty"] = st.radio("Difficulty level", ["Easy", "Medium", "Hard"])
     
-    if "processed_files" in st.session_state and st.session_state["processed_files"]:
-        selected_file = st.selectbox("Select a file for quiz generation", st.session_state["processed_files"])
+    quiz_files = [f for f, category in st.session_state["file_categories"].items() if category == "both"]
+    if quiz_files:
+        selected_file = st.selectbox("Select a file for quiz generation", quiz_files)
         
         if st.button("Generate Quiz"):
             # Reset the user's score
