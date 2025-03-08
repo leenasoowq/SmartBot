@@ -11,6 +11,12 @@ DIFFICULTY_LEVELS = ["Easy", "Medium", "Hard"]
 MIN_QUESTIONS = 1
 MAX_QUESTIONS = 10
 
+# Constants
+LABEL_LETTERS = ["A", "B", "C", "D"]
+DIFFICULTY_LEVELS = ["Easy", "Medium", "Hard"]
+MIN_QUESTIONS = 1
+MAX_QUESTIONS = 10
+
 # Load environment variables
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -48,22 +54,6 @@ def load_context_for_file(file_name, top_k=10):
     chunks = doc_service.retrieve_relevant_chunks(file_name, top_k=top_k)
     return "\n\n".join(chunks)
 
-def handle_answer_submission(q_index, labeled_options, correct_letter):
-    """Handle user answer submission and update score."""
-    user_letter_idx = labeled_options.index(st.session_state[f"quiz_q_{q_index}"])
-    user_letter_str = LABEL_LETTERS[user_letter_idx]
-
-    if user_letter_str == correct_letter:
-        st.success("Correct!")
-        if f"scored_{q_index}" not in st.session_state:
-            st.session_state[f"scored_{q_index}"] = True
-            st.session_state["correct_count"] += 1
-    else:
-        st.error(f"Incorrect. The correct answer is {correct_letter}.")
-
-# Main app
-st.title("📝 Quiz Generator")
-
 if st.session_state["quiz_step"] == "select_options":
     st.session_state["num_questions"] = st.slider("Number of questions", MIN_QUESTIONS, MAX_QUESTIONS, 5)
     st.session_state["difficulty"] = st.radio("Difficulty level", DIFFICULTY_LEVELS)
@@ -73,10 +63,9 @@ if st.session_state["quiz_step"] == "select_options":
         st.write("Selected File:", selected_file) 
         
         if st.button("Generate Quiz"):
-            # Reset the quiz state before generating a new quiz
+            # Reset the user score
             reset_quiz_state()
             context_text = load_context_for_file(selected_file)
-            # st.write("Context Text:", context_text)  
             
             if "Error" in context_text:
                 st.error(context_text)
@@ -117,20 +106,56 @@ elif st.session_state["quiz_step"] == "in_progress":
         st.subheader(f"Question {q_index + 1} of {len(quiz_data)}")
         st.write(question_text)
         
-        labeled_options = [f"{letter}) {opt}" for letter, opt in zip(LABEL_LETTERS, shuffled_options)]
-        chosen_option = st.radio("Select your answer:", labeled_options, key=f"quiz_q_{q_index}")
+        label_letters = ["A", "B", "C", "D"]
+        labeled_options = [f"{letter}) {opt}" for letter, opt in zip(label_letters, shuffled_options)]
+        
+        chosen_option = st.radio(
+            "Select your answer:", 
+            labeled_options,
+            key=f"quiz_q_{q_index}"
+        )
 
-        if st.button("Submit Answer"):
-            handle_answer_submission(q_index, labeled_options, correct_letter)
+        # Track if user submitted this question
+        submitted_key = f"submitted_{q_index}"
+        if submitted_key not in st.session_state:
+            st.session_state[submitted_key] = False
+
+        if not st.session_state[submitted_key]:
+            if st.button("Submit Answer"):
+                st.session_state[submitted_key] = True
+                st.rerun()
+        else:
+            # The user has submitted, so figure out correctness
+            user_letter_idx = labeled_options.index(chosen_option)
+            user_letter_str = label_letters[user_letter_idx]
+
+            if user_letter_str == correct_letter:
+                st.success("Correct!")
+                # Increase score only once per question
+                # So user can't keep re-submitting to inflate score
+                score_key = f"scored_{q_index}"  # track if we already gave them points
+                if score_key not in st.session_state:
+                    st.session_state[score_key] = True
+                    st.session_state["correct_count"] += 1
+            else:
+                st.error(f"Incorrect. The correct answer is {correct_letter}.")
+
             st.info(f"**Explanation:** {explanation}")
             st.write(f"**Confidence Score:** {confidence:.2f}%")
 
-        if st.button("Next Question"):
-            st.session_state["current_q_index"] += 1
-            if st.session_state["current_q_index"] >= len(quiz_data):
-                st.session_state["quiz_step"] = "score_report"
-            st.rerun()
+            if st.button("Next Question"):
+                st.session_state["current_q_index"] += 1
+                if st.session_state["current_q_index"] >= len(quiz_data):
+                    # All questions answered - show final score
+                    st.session_state["quiz_step"] = "score_report"
+                st.rerun()
 
+    else:
+        # No more questions - show final score
+        st.session_state["quiz_step"] = "score_report"
+        st.rerun()
+
+# SHOW FINAL SCORE
 elif st.session_state["quiz_step"] == "score_report":
     total_questions = len(st.session_state["quiz_data"])
     correct = st.session_state["correct_count"]
