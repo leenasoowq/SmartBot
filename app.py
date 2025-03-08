@@ -170,7 +170,7 @@ def process_user_query():
         st.session_state["conversation_history"].append((user_input, f"Error: {e}"))
     st.session_state.user_query = ""
 
-st.title("🤖 Your Academic Chatbot & Knowledge Hub")
+st.title("🤖 Your Academic Chatbot")
 
 # Sidebar for file upload
 with st.sidebar:
@@ -199,7 +199,7 @@ for user_msg, bot_msg in st.session_state["conversation_history"]:
     st.markdown(f"**🤖 ChatBot:**\n\n{bot_msg}")
 
 st.text_input(
-    "Enter your query or command ('quiz','summarize'):",
+    "Enter your query:",
     key="user_query",
     on_change=process_user_query
 )
