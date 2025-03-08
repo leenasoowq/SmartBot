@@ -3,11 +3,8 @@ import streamlit as st
 from dotenv import load_dotenv
 from openai import OpenAI
 from sklearn.metrics.pairwise import cosine_similarity
-
-# Additional import for reading Word docs
 import docx2txt
 
-# Local imports
 from services.language_service import LanguageService
 from services.document_service import DocumentService
 
@@ -15,103 +12,94 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# Instantiate Services
 lang_service = LanguageService(client)
 doc_service = DocumentService(client)
 embedding_model = doc_service.embedding_model
 
-# Initialize session state
 for key in ["processed_files", "conversation_history", "quiz_mode", "selected_file"]:
     if key not in st.session_state:
-        # processed_files & conversation_history as lists; quiz_mode is bool; selected_file is None
         st.session_state[key] = (
             [] if key in ["processed_files", "conversation_history"] 
             else False if key == "quiz_mode"
             else None
         )
 
+def sanitize_collection_name(file_name: str) -> str:
+    """Sanitize file name for Chroma collection: alphanumeric, underscore, hyphen only."""
+    base_name = file_name.rsplit(".", 1)[0]
+    sanitized = "".join(c for c in base_name if c.isalnum() or c in ["_", "-"])
+    while "__" in sanitized or "--" in sanitized:
+        sanitized = sanitized.replace("__", "_").replace("--", "-")
+    sanitized = sanitized.strip("_-")
+    sanitized = sanitized[:63]
+    if len(sanitized) < 3:
+        sanitized += "_doc"
+    return sanitized
+
 def preprocess_files(files):
-    """
-    Upload & parse PDF, DOC, DOCX, TXT files ONLY.
-    Extract text, then embed into the vectorstore with 'file_name' metadata.
-    Audio/Video are handled elsewhere (transcribe_translate.py).
-    """
+    """Upload and parse PDF, DOC/DOCX, TXT files into collections."""
     upload_dir = "uploads"
     os.makedirs(upload_dir, exist_ok=True)
 
-    # Filter only new files
     new_files = [f.name for f in files if f.name not in st.session_state["processed_files"]]
     if not new_files:
         return "No new files to process."
 
-    all_docs = []
+    processed_count = 0
     for file in files:
+        if file.name not in new_files:
+            continue
         file_path = os.path.join(upload_dir, file.name)
         with open(file_path, "wb") as out_file:
             out_file.write(file.getbuffer())
 
         ext = file.name.lower()
-        # 1) PDF
+        docs = []
         if ext.endswith(".pdf"):
-            pdf_docs = doc_service.process_pdf(file_path)
-            for d in pdf_docs:
-                d.metadata["file_name"] = file.name
-            all_docs.extend(pdf_docs)
-
-        # 2) Word (doc/docx)
+            docs = doc_service.process_pdf(file_path)
         elif ext.endswith((".docx", ".doc")):
             try:
                 text = docx2txt.process(file_path)
+                docs = doc_service.process_text(text)
             except Exception as e:
                 st.error(f"Error reading {file.name}: {e}")
                 continue
-            text_docs = doc_service.process_text(text)
-            for d in text_docs:
-                d.metadata["file_name"] = file.name
-            all_docs.extend(text_docs)
-
-        # 3) Plain text
         elif ext.endswith(".txt"):
             try:
                 with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
                     text = f.read()
+                docs = doc_service.process_text(text)
             except Exception as e:
                 st.error(f"Error reading {file.name}: {e}")
                 continue
-            text_docs = doc_service.process_text(text)
-            for d in text_docs:
-                d.metadata["file_name"] = file.name
-            all_docs.extend(text_docs)
         else:
-            # If user uploads unsupported type (e.g., mp3, wav, etc.):
-            st.warning(f"Unsupported file type for main chatbot: {file.name}. Use transcribe_translate.py for audio/video.")
+            st.warning(f"Unsupported file type: {file.name}")
             continue
 
-    if all_docs:
-        doc_service.add_documents_to_vectorstore(all_docs)
-        st.session_state["processed_files"].extend(new_files)
-        return f"Processed {len(new_files)} new file(s) successfully!"
-    return "No valid text extracted from these files."
+        if docs:
+            collection_name = sanitize_collection_name(file.name)
+            for d in docs:
+                d.metadata["file_name"] = file.name
+            doc_service.add_documents_to_vectorstore(docs, collection_name)
+            st.session_state["processed_files"].append(file.name)
+            processed_count += 1
+        os.remove(file_path)
+
+    return f"Processed {processed_count} new file(s) successfully!" if processed_count else "No valid text extracted."
 
 def retrieve_relevant_chunks(query: str, top_k: int = 20):
-    """
-    Fetch chunks relevant to 'query' from the selected file in st.session_state['selected_file'].
-    """
+    """Fetch chunks from the selected file’s collection."""
     f = st.session_state["selected_file"]
     if not f:
         return ["No file selected."]
     try:
-        # Use metadata filter so we only retrieve content from the chosen file
-        results = doc_service.vectorstore.similarity_search(query, k=top_k, filter={"file_name": f})
-        return [doc.page_content for doc in results] if results else ["No relevant chunks found."]
+        collection_name = sanitize_collection_name(f)
+        results = doc_service.retrieve_relevant_chunks(query, collection_name, top_k)
+        return results if results else ["No relevant chunks found."]
     except Exception as e:
         return [f"Error retrieving chunks: {e}"]
 
 def estimate_confidence(llm_response: str, context_text: str) -> float:
-    """
-    Compute a 0-100 confidence score by embedding the LLM response + context, 
-    then measuring cosine similarity.
-    """
     try:
         resp_emb = embedding_model.embed_query(llm_response)
         ctx_emb = embedding_model.embed_query(context_text)
@@ -125,7 +113,6 @@ def process_user_query():
     if not user_input:
         return
     
-    # "summarise" command => summarise the selected file
     if user_input.lower() == "summarise":
         if not st.session_state["processed_files"]:
             st.session_state["conversation_history"].append(("summarise", "No files uploaded."))
@@ -153,7 +140,6 @@ def process_user_query():
         st.session_state["user_query"] = ""
         return
     
-    # Normal Q&A
     chunks = retrieve_relevant_chunks(user_input)
     context_str = "\n\n".join(chunks) if isinstance(chunks, list) else str(chunks)
     msgs = [
@@ -172,13 +158,11 @@ def process_user_query():
 
 st.title("🤖 Your Academic Chatbot")
 
-# Sidebar for file upload
 with st.sidebar:
     st.subheader("Upload Files")
-    # Accept only PDF, DOC, DOCX, TXT 
     files = st.file_uploader(
         "Upload PDF, DOC, DOCX, or TXT",
-        type=["pdf","txt","doc","docx"],
+        type=["pdf", "txt", "doc", "docx"],
         accept_multiple_files=True
     )
     if files:
@@ -192,7 +176,6 @@ with st.sidebar:
             st.session_state["processed_files"]
         )
 
-# Main Chat
 st.header("Chat History")
 for user_msg, bot_msg in st.session_state["conversation_history"]:
     st.markdown(f"**🧑‍💻 You:** {user_msg}")
