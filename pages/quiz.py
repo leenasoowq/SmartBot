@@ -45,8 +45,11 @@ def reset_quiz_state():
     
 def load_context_for_file(file_name, top_k=10):
     """Retrieve relevant chunks from the vector store for a given file."""
-    chunks = doc_service.retrieve_relevant_chunks(file_name, top_k=top_k)
-    return "\n\n".join(chunks)
+    # Use a better query to focus on important concepts
+    query = f"important concepts in {file_name}"
+    chunks = doc_service.retrieve_relevant_chunks(query, top_k=10)
+    # Limit to first 5 chunks to avoid context overload
+    return "\n\n".join(chunks[:5]) if chunks else "No relevant content found."
 
 
 def handle_answer_submission(q_index, labeled_options, correct_letter):
@@ -62,6 +65,22 @@ def handle_answer_submission(q_index, labeled_options, correct_letter):
     else:
         st.error(f"Incorrect. The correct answer is {correct_letter}.")
 
+
+# Fallback method with stricter filtering
+def _fallback_question_generation(self, context, difficulty, num_questions):
+    """Fallback method with stricter constraints"""
+    # For large documents, extract the most informative sentences
+    if len(context) > 12000:
+        sentences = context.split('. ')
+        filtered = [s for s in sentences if len(s) > 50 and not any(w in s.lower() 
+            for w in ["copyright", "published", "edition", "author"])]
+        context = '. '.join(filtered[:30])
+    
+    # Create a stricter prompt and regenerate
+    messages = [
+        {"role": "system", "content": "You are an academic quiz creator focused EXCLUSIVELY on content understanding..."},
+        {"role": "user", "content": "Generate conceptual multiple-choice questions that test understanding..."}
+    ]
 st.title("📝 Quiz Generator")
 
 if st.session_state["quiz_step"] == "select_options":
