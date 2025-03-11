@@ -3,12 +3,9 @@ import streamlit as st
 from dotenv import load_dotenv
 from openai import OpenAI
 from sklearn.metrics.pairwise import cosine_similarity
-
-# Additional import for reading Word docs
 import docx2txt
-import nbformat
+import numpy as np
 
-# Local imports
 from services.language_service import LanguageService
 from services.document_service import DocumentService
 
@@ -16,162 +13,122 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# Instantiate Services
 lang_service = LanguageService(client)
 doc_service = DocumentService(client)
 embedding_model = doc_service.embedding_model
 
-# Initialize session state
-for key in ["processed_files", "conversation_history", "quiz_mode", "selected_file", "file_categories"]:
+for key in ["processed_files", "conversation_history", "quiz_mode", "selected_file", "last_bot_question", "last_expected_answer"]:
     if key not in st.session_state:
         st.session_state[key] = (
             [] if key in ["processed_files", "conversation_history"] 
             else False if key == "quiz_mode"
-            else {} if key == "file_categories"
-            else None
+            else None if key in ["selected_file", "last_expected_answer"]
+            else ""  # For last_bot_question
         )
+        
+def get_expected_answer(question: str) -> str:
+    """Retrieve or generate the correct answer for evaluation."""
+    msgs = [
+        {"role": "system", "content": "You are an AI that provides concise and correct answers to questions."},
+        {"role": "user", "content": f"Provide the correct answer to: {question}"}
+    ]
+    try:
+        r = client.chat.completions.create(model="gpt-4", messages=msgs, max_tokens=100, temperature=0.2)
+        return r.choices[0].message.content.strip()
+    except Exception as e:
+        return "Error retrieving expected answer."
+        
+def evaluate_user_answer(user_answer: str, expected_answer: str) -> str:
+    """Evaluates user response against the expected answer using GPT-4."""
+    if user_answer.lower() in ["i don't know", "idk", "not sure"]:
+        return "Don't Know"
+    
+    msgs = [
+        {"role": "system", "content": "You evaluate if a response is correct. Reply only with 'Correct', 'Close', or 'Incorrect'."},
+        {"role": "user", "content": f"Expected: {expected_answer}\nUser: {user_answer}\nHow accurate is the user's response?"}
+    ]
+    try:
+        r = client.chat.completions.create(model="gpt-4", messages=msgs, max_tokens=10, temperature=0.2)
+        return r.choices[0].message.content.strip()
+    except Exception as e:
+        return "Evaluation Error"
+
+def sanitize_collection_name(file_name: str) -> str:
+    """Sanitize file name for Chroma collection: alphanumeric, underscore, hyphen only."""
+    base_name = file_name.rsplit(".", 1)[0]
+    sanitized = "".join(c for c in base_name if c.isalnum() or c in ["_", "-"])
+    while "__" in sanitized or "--" in sanitized:
+        sanitized = sanitized.replace("__", "_").replace("--", "-")
+    sanitized = sanitized.strip("_-")
+    sanitized = sanitized[:63]
+    if len(sanitized) < 3:
+        sanitized += "_doc"
+    return sanitized
 
 def preprocess_files(files):
-    """
-    Upload & parse PDF, DOC, DOCX, TXT, PY, and IPYNB files ONLY.
-    Extract text, then embed into the vectorstore with 'file_name' metadata.
-    Audio/Video are handled elsewhere (transcribe_translate.py).
-    """
+    """Upload and parse PDF, DOC/DOCX, TXT files into collections."""
     upload_dir = "uploads"
     os.makedirs(upload_dir, exist_ok=True)
 
-    # Filter only new files
     new_files = [f.name for f in files if f.name not in st.session_state["processed_files"]]
     if not new_files:
         return "No new files to process."
 
-    all_docs = []
+    processed_count = 0
     for file in files:
+        if file.name not in new_files:
+            continue
         file_path = os.path.join(upload_dir, file.name)
         with open(file_path, "wb") as out_file:
             out_file.write(file.getbuffer())
 
         ext = file.name.lower()
-        category = "chatbot"  # Default to chatbot-only files
-        
-        # 1) PDF
+        docs = []
         if ext.endswith(".pdf"):
-            pdf_docs = doc_service.process_pdf(file_path)
-            for d in pdf_docs:
-                d.metadata["file_name"] = file.name
-            all_docs.extend(pdf_docs)
-            category = "both"
-
-        # 2) Word (doc/docx)
+            docs = doc_service.process_pdf(file_path)
         elif ext.endswith((".docx", ".doc")):
             try:
                 text = docx2txt.process(file_path)
+                docs = doc_service.process_text(text)
             except Exception as e:
                 st.error(f"Error reading {file.name}: {e}")
                 continue
-            text_docs = doc_service.process_text(text)
-            for d in text_docs:
-                d.metadata["file_name"] = file.name
-            all_docs.extend(text_docs)
-            category = "both"
-
-        # 3) Plain text
         elif ext.endswith(".txt"):
             try:
                 with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
                     text = f.read()
+                docs = doc_service.process_text(text)
             except Exception as e:
                 st.error(f"Error reading {file.name}: {e}")
                 continue
-            text_docs = doc_service.process_text(text)
-            for d in text_docs:
-                d.metadata["file_name"] = file.name
-            all_docs.extend(text_docs)
-            category = "both"
-        
-        # 4) Python files
-        elif ext.endswith(".py"):
-            try:
-                with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-                    text = f.read()
-            except Exception as e:
-                st.error(f"Error reading {file.name}: {e}")
-                continue
-            
-            # Automatically display extracted code
-            st.session_state["conversation_history"].append((file.name, f"```python\n{text}\n```"))
-            
-            text_docs = doc_service.process_text(text)
-            for d in text_docs:
-                d.metadata["file_name"] = file.name
-            all_docs.extend(text_docs)
-            category = "chatbot"
-        
-       # 5) Jupyter Notebook (ipynb)
-        elif ext.endswith(".ipynb"):
-            try:
-                with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-                    nb_data = nbformat.read(f, as_version=4)
-                
-                extracted_code = []
-                for cell in nb_data.cells:
-                    if cell.cell_type == "code":
-                        extracted_code.append("\n".join(cell["source"]) if isinstance(cell["source"], list) else cell["source"])
-                
-                text = "\n\n".join(extracted_code)
-            except Exception as e:
-                st.error(f"Error reading {file.name}: {e}")
-                continue
-            
-            # Automatically display extracted code
-            st.session_state["conversation_history"].append((file.name, f"```python\n{text}\n```"))
-            
-            text_docs = doc_service.process_text(text)
-            for d in text_docs:
-                d.metadata["file_name"] = file.name
-            all_docs.extend(text_docs)
-            category = "chatbot"
-            
         else:
-            # If user uploads unsupported type (e.g., mp3, wav, etc.):
-            st.warning(f"Unsupported file type for main chatbot: {file.name}. Use transcribe_translate.py for audio/video.")
+            st.warning(f"Unsupported file type: {file.name}")
             continue
 
-        # Store file category
-        st.session_state["file_categories"][file.name] = category
+        if docs:
+            collection_name = sanitize_collection_name(file.name)
+            for d in docs:
+                d.metadata["file_name"] = file.name
+            doc_service.add_documents_to_vectorstore(docs, collection_name)
+            st.session_state["processed_files"].append(file.name)
+            processed_count += 1
+        os.remove(file_path)
 
-    if all_docs:
-        doc_service.add_documents_to_vectorstore(all_docs)
-        st.session_state["processed_files"].extend(new_files)
-        return f"Processed {len(new_files)} new file(s) successfully!"
-    return "No valid text extracted from these files."
+    return f"Processed {processed_count} new file(s) successfully!" if processed_count else "No valid text extracted."
 
 def retrieve_relevant_chunks(query: str, top_k: int = 20):
-    """
-    Fetch chunks relevant to 'query' from the selected file in st.session_state['selected_file'].
-    """
+    """Fetch chunks from the selected file’s collection."""
     f = st.session_state["selected_file"]
     if not f:
         return ["No file selected."]
-
-    # Ensure chatbot-relevant files are included
-    if f not in st.session_state["file_categories"]:
-        return ["File category not found."]
-    
-    category = st.session_state["file_categories"][f]  # Get category
-
-    if category in ["both", "chatbot"]:  # Include chatbot files
-        try:
-            results = doc_service.vectorstore.similarity_search(query, k=top_k, filter={"file_name": f})
-            return [doc.page_content for doc in results] if results else ["No relevant chunks found."]
-        except Exception as e:
-            return [f"Error retrieving chunks: {e}"]
+    try:
+        collection_name = sanitize_collection_name(f)
+        results = doc_service.retrieve_relevant_chunks(query, collection_name, top_k)
+        return results if results else ["No relevant chunks found."]
+    except Exception as e:
+        return [f"Error retrieving chunks: {e}"]
 
 def estimate_confidence(llm_response: str, context_text: str) -> float:
-    """
-    Compute a 0-100 confidence score by embedding the LLM response + context, 
-    then measuring cosine similarity.
-    """
     try:
         resp_emb = embedding_model.embed_query(llm_response)
         ctx_emb = embedding_model.embed_query(context_text)
@@ -185,7 +142,6 @@ def process_user_query():
     if not user_input:
         return
     
-    # "summarise" command => summarise the selected file
     if user_input.lower() == "summarise":
         if not st.session_state["processed_files"]:
             st.session_state["conversation_history"].append(("summarise", "No files uploaded."))
@@ -196,7 +152,7 @@ def process_user_query():
             st.session_state["conversation_history"].append(("summarise", "No file selected."))
             st.session_state.user_query = ""
             return
-        chunks = retrieve_relevant_chunks(fn) if st.session_state["file_categories"].get(fn, "both") in ["both", "chatbot"] else ["This file is not available for chatbot queries."]
+        chunks = retrieve_relevant_chunks(fn)
         context = "\n\n".join(chunks) if isinstance(chunks, list) else str(chunks)
         msgs = [
             {"role": "system", "content": "You are a knowledgeable assistant..."},
@@ -213,7 +169,24 @@ def process_user_query():
         st.session_state["user_query"] = ""
         return
     
-    # Normal Q&A
+    if st.session_state["last_bot_question"] and st.session_state["last_expected_answer"]:
+        evaluation = evaluate_user_answer(user_input, st.session_state["last_expected_answer"])
+        
+        if evaluation == "Don't Know":
+            correct_answer = st.session_state["last_expected_answer"]
+            feedback = f"You didn't know the answer. Here is the correct answer:\n\n**{correct_answer}**"
+        elif evaluation == "Incorrect":
+            correct_answer = st.session_state["last_expected_answer"]
+            feedback = f"**Evaluation:** {evaluation}\n\nThe correct answer is: {correct_answer}"
+        else:
+            feedback = f"**Evaluation:** {evaluation}"
+        
+        st.session_state["conversation_history"].append((user_input, feedback))
+        st.session_state["last_bot_question"] = ""
+        st.session_state["last_expected_answer"] = ""
+        st.session_state.user_query = ""
+        return
+    
     chunks = retrieve_relevant_chunks(user_input)
     context_str = "\n\n".join(chunks) if isinstance(chunks, list) else str(chunks)
     msgs = [
@@ -226,19 +199,21 @@ def process_user_query():
         conf = estimate_confidence(answer, context_str)
         final_ans = f"{answer}\n\n**Confidence Score:** {conf:.2f}%"
         st.session_state["conversation_history"].append((user_input, final_ans))
+        # If the bot's response is a question, store it for evaluation
+        if answer.endswith("?"):
+            st.session_state["last_bot_question"] = answer
+            st.session_state["last_expected_answer"] = get_expected_answer(answer)
     except Exception as e:
         st.session_state["conversation_history"].append((user_input, f"Error: {e}"))
     st.session_state.user_query = ""
 
-st.title("🤖 Your Academic Chatbot & Knowledge Hub")
+st.title("🤖 Your Academic Chatbot")
 
-# Sidebar for file upload
 with st.sidebar:
     st.subheader("Upload Files")
-    # Accept only PDF, DOC, DOCX, TXT 
     files = st.file_uploader(
-        "Upload PDF, DOC, DOCX, TXT, PY, or IPYNB",
-        type=["pdf","txt","doc", "docx", "py", "ipynb"],
+        "Upload PDF, DOC, DOCX, or TXT",
+        type=["pdf", "txt", "doc", "docx"],
         accept_multiple_files=True
     )
     if files:
@@ -252,14 +227,13 @@ with st.sidebar:
             st.session_state["processed_files"]
         )
 
-# Main Chat
 st.header("Chat History")
 for user_msg, bot_msg in st.session_state["conversation_history"]:
     st.markdown(f"**🧑‍💻 You:** {user_msg}")
     st.markdown(f"**🤖 ChatBot:**\n\n{bot_msg}")
 
 st.text_input(
-    "Enter your query or command ('quiz','summarize'):",
+    "Enter your query:",
     key="user_query",
     on_change=process_user_query
 )
