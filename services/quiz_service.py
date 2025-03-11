@@ -107,3 +107,4 @@ Explanation: <explanation_text>
         context_embedding = self.embedding_model.embed_query(context)
         similarity = cosine_similarity([explanation_embedding], [context_embedding])[0][0]
         return float(min(100.0, max(0.0, (similarity + 1) * 50)))
+        
