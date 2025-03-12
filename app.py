@@ -5,6 +5,7 @@ from openai import OpenAI
 from sklearn.metrics.pairwise import cosine_similarity
 import docx2txt
 import numpy as np
+import re
 
 from services.language_service import LanguageService
 from services.document_service import DocumentService
@@ -167,6 +168,53 @@ def process_user_query():
         except Exception as e:
             st.session_state["conversation_history"].append(("summarize", f"Error: {e}"))
         st.session_state["user_query"] = ""
+        return
+    
+        # Use OpenAI to determine if the user is asking for a test
+    classification_msgs = [
+        {"role": "system", "content": "You analyze user requests to determine if they are asking to be tested on a topic."},
+        {"role": "user", "content": f"Analyze this request and respond only with 'yes' or 'no': {user_input}"}
+    ]
+    try:
+        classification_response = client.chat.completions.create(
+            model="gpt-4", messages=classification_msgs, max_tokens=10, temperature=0.2
+        )
+        is_test_request = classification_response.choices[0].message.content.strip().lower()
+    except Exception as e:
+        st.session_state["conversation_history"].append((user_input, f"Error in classification: {e}"))
+        st.session_state.user_query = ""
+        return
+    
+    if is_test_request == "yes":
+        file_name = st.session_state.get("selected_file", None)
+        if not file_name:
+            st.session_state["conversation_history"].append(("Test Request", "No document is currently selected. Please upload or select a file first."))
+            st.session_state.user_query = ""
+            return
+
+        chunks = retrieve_relevant_chunks(file_name)
+        document_text = "\n\n".join(chunks) if isinstance(chunks, list) else str(chunks)
+
+        if not document_text.strip():
+            st.session_state["conversation_history"].append(("Test Request", "Could not extract relevant content from the document."))
+            st.session_state.user_query = ""
+            return
+
+        msgs = [
+            {"role": "system", "content": "You generate a single question based on the provided content."},
+            {"role": "user", "content": f"Generate exactly one question based on the following content:\n\n{document_text}"}
+        ]
+        
+        try:
+            r = client.chat.completions.create(model="gpt-4", messages=msgs, max_tokens=100, temperature=0.7)
+            question = r.choices[0].message.content.strip().split("? ")[0] + "?"
+            st.session_state["conversation_history"].append(("Test Request", f"Here is your test question:\n\n**{question}**\n\nNote, I can only generate one question at a time and cannot generate multiple-choice questions MCQs."))
+            st.session_state["last_bot_question"] = question
+            st.session_state["last_expected_answer"] = get_expected_answer(question)
+        except Exception as e:
+            st.session_state["conversation_history"].append(("Test Request", f"Error: {e}"))
+        
+        st.session_state.user_query = ""
         return
     
     if st.session_state["last_bot_question"] and st.session_state["last_expected_answer"]:
