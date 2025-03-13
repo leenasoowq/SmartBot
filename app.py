@@ -28,16 +28,30 @@ for key in ["processed_files", "conversation_history", "quiz_mode", "selected_fi
         )
         
 def get_expected_answer(question: str) -> str:
-    """Retrieve or generate the correct answer for evaluation."""
+    """Retrieve the correct answer using document chunks if available, without disclaimers."""
+    
+    # Retrieve relevant document chunks
+    chunks = retrieve_relevant_chunks(question, top_k=5)  # Fetch top 5 relevant chunks
+    context_text = "\n\n".join(chunks) if chunks else None
+
+    if not context_text:
+        return "No relevant answer found."
+
     msgs = [
-        {"role": "system", "content": "You are an AI that provides concise and correct answers to questions."},
-        {"role": "user", "content": f"Provide the correct answer to: {question}"}
+        {"role": "system", "content": (
+            "You are an expert AI assistant. Provide only the correct answer. "
+            "Use only the given context to answer the question. "
+            "Do not include disclaimers, references to document access, or uncertainty. "
+            "If the answer is not found, respond with 'No relevant answer found.'"
+        )},
+        {"role": "user", "content": f"Context:\n{context_text}\n\nQuestion: {question}\nProvide only the answer."}
     ]
+
     try:
         r = client.chat.completions.create(model="gpt-4", messages=msgs, max_tokens=100, temperature=0.2)
         return r.choices[0].message.content.strip()
     except Exception as e:
-        return "Error retrieving expected answer."
+        return "No relevant answer found."
         
 def evaluate_user_answer(user_answer: str, expected_answer: str) -> str:
     """Evaluates user response against the expected answer using GPT-4."""
