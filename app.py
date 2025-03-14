@@ -138,6 +138,13 @@ def retrieve_relevant_chunks(query: str, top_k: int = 20):
     except Exception as e:
         return [f"Error retrieving chunks: {e}"]
 
+# Ensuring conversation history stores only the last 5 interactions
+def update_conversation_history(user_input, bot_response):
+    st.session_state["conversation_history"].append((user_input, bot_response))
+    if len(st.session_state["conversation_history"]) > 5:
+        st.session_state["conversation_history"] = st.session_state["conversation_history"][-5:]
+
+
 def estimate_confidence(llm_response: str, context_text: str) -> float:
     try:
         resp_emb = embedding_model.embed_query(llm_response)
@@ -225,6 +232,7 @@ def process_user_query():
         
         st.session_state.user_query = ""
         return
+    feedback = ""  # Initialize feedback to prevent UnboundLocalError
     
     if st.session_state["last_bot_question"] and st.session_state["last_expected_answer"]:
         evaluation = evaluate_user_answer(user_input, st.session_state["last_expected_answer"])
@@ -238,7 +246,7 @@ def process_user_query():
         else:
             feedback = f"**Evaluation:** {evaluation}"
         
-        st.session_state["conversation_history"].append((user_input, feedback))
+        update_conversation_history(user_input, feedback)
         st.session_state["last_bot_question"] = ""
         st.session_state["last_expected_answer"] = ""
         st.session_state.user_query = ""
@@ -255,42 +263,94 @@ def process_user_query():
         answer = r.choices[0].message.content.strip()
         conf = estimate_confidence(answer, context_str)
         final_ans = f"{answer}\n\n**Confidence Score:** {conf:.2f}%"
-        st.session_state["conversation_history"].append((user_input, final_ans))
+        update_conversation_history(user_input, feedback)
         # If the bot's response is a question, store it for evaluation
         if answer.endswith("?"):
             st.session_state["last_bot_question"] = answer
             st.session_state["last_expected_answer"] = get_expected_answer(answer)
     except Exception as e:
-        st.session_state["conversation_history"].append((user_input, f"Error: {e}"))
+        update_conversation_history(user_input, feedback)
     st.session_state.user_query = ""
 
 st.title("🤖 Your Academic Chatbot")
 
+# Ensure session state variables exist
+if "uploading" not in st.session_state:
+    st.session_state["uploading"] = False
+if "files_to_upload" not in st.session_state:
+    st.session_state["files_to_upload"] = None
+if "uploader_key" not in st.session_state:
+    st.session_state["uploader_key"] = 0  # Initialize key for uploader
+
+# Custom CSS to disable UI when uploading
+if st.session_state["uploading"]:
+    st.markdown(
+        """
+        <style>
+        [data-testid="stSidebar"], .block-container {
+            pointer-events: none !important;
+            opacity: 0.5 !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
 with st.sidebar:
     st.subheader("Upload Files")
-    files = st.file_uploader(
+
+    # File uploader (Forces reset by changing key)
+    uploaded_files = st.file_uploader(
         "Upload PDF, DOC, DOCX, or TXT",
         type=["pdf", "txt", "doc", "docx"],
-        accept_multiple_files=True
+        accept_multiple_files=True,
+        key=f"file_uploader_{st.session_state['uploader_key']}"  # Unique key to refresh uploader
     )
-    if files:
-        msg = preprocess_files(files)
-        st.success(msg)
 
+    # Store files in session state until "Upload" is clicked
+    if uploaded_files:
+        st.session_state["files_to_upload"] = uploaded_files
+
+    # Upload button (Only appears if files are selected)
+    if st.session_state["files_to_upload"]:
+        if st.button("Upload", disabled=st.session_state["uploading"]):
+            st.session_state["uploading"] = True  # Lock UI
+            with st.spinner("Processing files... Please wait!"):
+                msg = preprocess_files(st.session_state["files_to_upload"])  # Process files
+
+            st.success(msg)
+
+            # 🔹 Reset file uploader and remove upload button
+            st.session_state["files_to_upload"] = None  # Clear stored files
+            st.session_state["uploading"] = False  # Unlock UI
+            
+            # 🔹 Force reset of file uploader by changing key
+            st.session_state["uploader_key"] += 1  
+            st.rerun()  # Force UI update
+
+    # Disable file selection while uploading
     if st.session_state["processed_files"]:
         st.subheader("Available Files")
         st.session_state["selected_file"] = st.selectbox(
             "Select a file",
-            st.session_state["processed_files"]
+            st.session_state["processed_files"],
+            disabled=st.session_state["uploading"]
         )
 
+# Ensure UI unlocks properly before chatbot is rendered
+if st.session_state["uploading"]:
+    st.stop()  # Prevents rendering while upload is happening
+
+# Chatbot UI - Locked during upload
 st.header("Chat History")
-for user_msg, bot_msg in st.session_state["conversation_history"]:
+for user_msg, bot_msg in st.session_state.get("conversation_history", []):
     st.markdown(f"**🧑‍💻 You:** {user_msg}")
     st.markdown(f"**🤖 ChatBot:**\n\n{bot_msg}")
 
+# Ensure text input is only disabled during upload
 st.text_input(
     "Enter your query:",
     key="user_query",
-    on_change=process_user_query
+    on_change=process_user_query,
+    disabled=st.session_state["uploading"]
 )
