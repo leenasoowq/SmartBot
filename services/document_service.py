@@ -1,5 +1,3 @@
-# services/document_service.py
-
 import os
 from openai import OpenAI
 from langchain_community.document_loaders import PyPDFLoader
@@ -7,13 +5,7 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import OpenAIEmbeddings
 
-
 class DocumentService:
-    """
-    Handles loading PDF documents, splitting text into chunks, and
-    storing/retrieving embeddings from Chroma.
-    """
-
     def __init__(
         self,
         client: OpenAI,
@@ -22,58 +14,50 @@ class DocumentService:
         chunk_size: int = 1000,
         chunk_overlap: int = 200
     ):
-        """
-        :param client: An instance of openai.OpenAI (unused directly, but can be extended).
-        :param persist_directory: Directory for ChromaDB to store embeddings.
-        :param embedding_model_name: The model name for generating embeddings.
-        :param chunk_size: Character size for each chunk of text.
-        :param chunk_overlap: Overlap between consecutive chunks for better context.
-        """
         self.client = client
         self.embedding_model = OpenAIEmbeddings(model=embedding_model_name)
-        self.vectorstore = Chroma(
-            persist_directory=persist_directory,
-            embedding_function=self.embedding_model
-        )
+        self.persist_directory = persist_directory
         self.splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap
         )
 
+    def get_vectorstore(self, collection_name: str):
+        """Returns a Chroma vector store instance for a specific collection."""
+        return Chroma(
+            collection_name=collection_name,
+            persist_directory=self.persist_directory,
+            embedding_function=self.embedding_model
+        )
+
     def process_pdf(self, file_path: str):
-        """
-        Loads a PDF from the given path and splits it into smaller chunks (Documents).
-        :param file_path: Path to the PDF file.
-        :return: List of Documents.
-        """
+        """Loads a PDF and splits it into chunks."""
         loader = PyPDFLoader(file_path)
         documents = loader.load()
-        return self.splitter.split_documents(documents)
+        print(f"Loaded {len(documents)} pages from {file_path}")
+        for i, doc in enumerate(documents[:5]):
+            print(f"Page {i+1} (first 500 chars): {doc.page_content[:500]}")
+        split_docs = self.splitter.split_documents(documents)
+        print(f"Split into {len(split_docs)} chunks")
+        return split_docs
 
     def process_text(self, text: str):
-        """
-        Splits a raw text string into smaller chunked Documents.
-        :param text: The text to split.
-        :return: List of Documents.
-        """
+        """Splits raw text into chunks."""
         return self.splitter.create_documents([text])
 
-    def add_documents_to_vectorstore(self, docs):
-        """
-        Adds the given documents to the Chroma vector store, generating embeddings.
-        :param docs: A list of Document objects (from LangChain).
-        """
-        self.vectorstore.add_documents(docs)
+    def add_documents_to_vectorstore(self, docs, collection_name: str):
+        """Adds documents to a specific collection in Chroma."""
+        vectorstore = self.get_vectorstore(collection_name)
+        print(f"Adding {len(docs)} documents to collection '{collection_name}'")
+        for i, doc in enumerate(docs[:5]):
+            print(f"Chunk {i+1}: {doc.page_content[:500]}")
+        vectorstore.add_documents(docs)
 
-    def retrieve_relevant_chunks(self, query: str, top_k: int = 10):
-        """
-        Searches the vector store for the chunks most similar to the query.
-        :param query: The text query.
-        :param top_k: Number of top matching results to return.
-        :return: List of chunk strings that are most relevant to the query.
-        """
+    def retrieve_relevant_chunks(self, query: str, collection_name: str, top_k: int = 10):
+        """Searches a specific collection for relevant chunks."""
         try:
-            results = self.vectorstore.similarity_search(query, k=top_k)
+            vectorstore = self.get_vectorstore(collection_name)
+            results = vectorstore.similarity_search(query, k=top_k)
             return [doc.page_content for doc in results]
         except Exception as e:
             return [f"Error retrieving documents: {e}"]
