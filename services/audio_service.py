@@ -1,63 +1,55 @@
+# services/audio_service.py
 import os
+from pydub import AudioSegment
 from openai import OpenAI
-from langchain_community.document_loaders import PyPDFLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import Chroma
-from langchain_community.embeddings import OpenAIEmbeddings
 
-class DocumentService:
-    def __init__(
-        self,
-        client: OpenAI,
-        persist_directory: str = "./chroma_db",
-        embedding_model_name: str = "text-embedding-3-large",
-        chunk_size: int = 1000,
-        chunk_overlap: int = 200
-    ):
+class AudioService:
+    """
+    Provides audio-related utilities: chunking audio and transcribing via Whisper.
+    """
+    def __init__(self, client: OpenAI, max_size_mb: float = 25.0):
         self.client = client
-        self.embedding_model = OpenAIEmbeddings(model=embedding_model_name)
-        self.persist_directory = persist_directory
-        self.splitter = RecursiveCharacterTextSplitter(
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap
-        )
+        self.max_size_mb = max_size_mb
 
-    def get_vectorstore(self, collection_name: str):
-        """Returns a Chroma vector store instance for a specific collection."""
-        return Chroma(
-            collection_name=collection_name,
-            persist_directory=self.persist_directory,
-            embedding_function=self.embedding_model
-        )
+    def split_audio(self, file_path: str, chunk_size_mb: int = 24) -> list[AudioSegment]:
+        """
+        Splits an audio file into smaller chunks if over chunk_size_mb MB.
+        Returns a list of AudioSegments.
+        """
+        audio = AudioSegment.from_file(file_path)
+        chunk_length_ms = chunk_size_mb * 60 * 1000  # MB -> approx. minutes -> ms
+        return [audio[i:i + chunk_length_ms] for i in range(0, len(audio), chunk_length_ms)]
 
-    def process_pdf(self, file_path: str):
-        """Loads a PDF and splits it into chunks."""
-        loader = PyPDFLoader(file_path)
-        documents = loader.load()
-        print(f"Loaded {len(documents)} pages from {file_path}")
-        for i, doc in enumerate(documents[:5]):
-            print(f"Page {i+1} (first 500 chars): {doc.page_content[:500]}")
-        split_docs = self.splitter.split_documents(documents)
-        print(f"Split into {len(split_docs)} chunks")
-        return split_docs
-
-    def process_text(self, text: str):
-        """Splits raw text into chunks."""
-        return self.splitter.create_documents([text])
-
-    def add_documents_to_vectorstore(self, docs, collection_name: str):
-        """Adds documents to a specific collection in Chroma."""
-        vectorstore = self.get_vectorstore(collection_name)
-        print(f"Adding {len(docs)} documents to collection '{collection_name}'")
-        for i, doc in enumerate(docs[:5]):
-            print(f"Chunk {i+1}: {doc.page_content[:500]}")
-        vectorstore.add_documents(docs)
-
-    def retrieve_relevant_chunks(self, query: str, collection_name: str, top_k: int = 10):
-        """Searches a specific collection for relevant chunks."""
+    def transcribe_audio(self, file_path: str) -> str:
+        """
+        Transcribes an audio file using OpenAI Whisper (model='whisper-1').
+        Auto-chunks if file > self.max_size_mb.
+        """
         try:
-            vectorstore = self.get_vectorstore(collection_name)
-            results = vectorstore.similarity_search(query, k=top_k)
-            return [doc.page_content for doc in results]
+            file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+            if file_size_mb > self.max_size_mb:
+                audio_chunks = self.split_audio(file_path)
+                partials = []
+                for i, chunk in enumerate(audio_chunks):
+                    tmp_path = f"{file_path}_chunk_{i}.mp3"
+                    chunk.export(tmp_path, format="mp3")
+                    with open(tmp_path, "rb") as f:
+                        result = self.client.audio.transcriptions.create(
+                            model="whisper-1",
+                            file=f,
+                            response_format="text"
+                        )
+                    partials.append(result)
+                    os.remove(tmp_path)
+                return " ".join(partials)
+            else:
+                # Transcribe directly
+                with open(file_path, "rb") as f:
+                    result = self.client.audio.transcriptions.create(
+                        model="whisper-1",
+                        file=f,
+                        response_format="text"
+                    )
+                return result
         except Exception as e:
-            return [f"Error retrieving documents: {e}"]
+            return f"Error transcribing audio: {e}"
