@@ -126,11 +126,12 @@ if st.session_state["quiz_step"] == "select_options":
                 st.error(context_text)
             else:
                 try:
-                    quiz_data = quiz_service.generate_quiz_questions(
-                        context=context_text,
-                        difficulty=st.session_state["difficulty"],
-                        num_questions=st.session_state["num_questions"]
-                    )
+                    with st.spinner("Generating quiz... Please wait! 🕒"):
+                        quiz_data = quiz_service.generate_quiz_questions(
+                            context=context_text,
+                            difficulty=st.session_state["difficulty"],
+                            num_questions=st.session_state["num_questions"]
+                        )
                     st.write("Quiz Data Generated:", quiz_data)  # Debugging output
                     if not quiz_data:
                         st.error("No quiz questions could be generated.")
