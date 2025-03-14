@@ -8,9 +8,7 @@ class QuizService:
         self.client = client
         self.embedding_model = OpenAIEmbeddings(model=embedding_model_name)
 
-    def generate_quiz_questions(self, context: str, difficulty: str = "Medium", num_questions: int = 5, source: str = "quiz") -> list:
-        if source == "app":  # Detect if it's from app.py (chatbot)
-            num_questions = 1  # 🔥 Force 1 question only
+    def generate_quiz_questions(self, context: str, difficulty: str = "Medium", num_questions: int = 5) -> list:
         messages = [
             {
                 "role": "system",
@@ -107,4 +105,3 @@ Explanation: <explanation_text>
         context_embedding = self.embedding_model.embed_query(context)
         similarity = cosine_similarity([explanation_embedding], [context_embedding])[0][0]
         return float(min(100.0, max(0.0, (similarity + 1) * 50)))
-        
