@@ -32,11 +32,16 @@ MAX_HISTORY = 5  # Store only the last 10 messages
 def update_conversation_history(role, message):
     """Append new message to conversation history while maintaining a fixed size."""
     if role not in ["user", "assistant"]:
-        return  # Ensure only user and assistant messages are logged
+        print(f"⚠️ Invalid role detected: {role}, message: {message}")  # Debugging info
+        return  # Ensure only valid roles are logged
+
     print(f"Before update: {st.session_state['conversation_history']}")
     st.session_state["conversation_history"].append((role, message))
+    
+    # Maintain history limit
     if len(st.session_state["conversation_history"]) > MAX_HISTORY:
         st.session_state["conversation_history"] = st.session_state["conversation_history"][-MAX_HISTORY:]
+    
     print(f"After update: {st.session_state['conversation_history']}")
 
 def get_expected_answer(question: str) -> str:
@@ -185,9 +190,9 @@ def process_user_query():
              ans = r.choices[0].message.content.strip()
              conf = estimate_confidence(ans, context)
              final = f"**Summary of {fn}:**\n{ans}\n\n**Confidence Score:** {conf:.2f}%\n---\n"
-             st.session_state["conversation_history"].append(("summarize", final))
+             st.session_state["conversation_history"].append(("user", final))
          except Exception as e:
-             st.session_state["conversation_history"].append(("summarize", f"Error: {e}"))
+             st.session_state["conversation_history"].append(("user", f"Error: {e}"))
          st.session_state["user_query"] = ""
          return
  
@@ -209,7 +214,7 @@ def process_user_query():
      if is_test_request == "yes":
          file_name = st.session_state.get("selected_file", None)
          if not file_name:
-             st.session_state["conversation_history"].append(("Test Request", "No document is currently selected. Please upload or select a file first."))
+             st.session_state["conversation_history"].append(("user", "No document is currently selected. Please upload or select a file first."))
              st.session_state.user_query = ""
              return
  
@@ -217,7 +222,7 @@ def process_user_query():
          document_text = "\n\n".join(chunks) if isinstance(chunks, list) else str(chunks)
  
          if not document_text.strip():
-             st.session_state["conversation_history"].append(("Test Request", "Could not extract relevant content from the document."))
+             st.session_state["conversation_history"].append(("user", "Could not extract relevant content from the document."))
              st.session_state.user_query = ""
              return
  
@@ -254,8 +259,7 @@ def process_user_query():
          else:
              feedback = f"**Evaluation:** {evaluation}"
  
-         quiz_entry = (st.session_state["last_bot_question"], f"User's Answer: {user_input}\n\n**Evaluation:** {evaluation}\n\nCorrect Answer: {st.session_state["last_expected_answer"]}")
-         st.session_state["conversation_history"].append(quiz_entry)
+         st.session_state["conversation_history"].append((user_input, feedback))
          st.session_state["last_bot_question"] = ""
          st.session_state["last_expected_answer"] = ""
          st.session_state.user_query = ""
@@ -267,20 +271,19 @@ def process_user_query():
     "You are a knowledgeable assistant... Use only the variety of available 'Context' below while maintaining conversational memory. "
     "Ensure quiz questions cover different topics if multiple contexts are available."}]
 
-     # Append last 5 messages but **skip evaluation-related messages**
+     # Append last 5 messages but **skip evaluation-related messages and invalid roles**
      for role, message in st.session_state["conversation_history"][-5:]:
          if "Evaluation:" not in message and "Correct Answer:" not in message:
              msgs.append({"role": "user" if role == "user" else "assistant", "content": message})
 
      # Add the new user query
      msgs.append({"role": "user", "content": user_input})
-
+     
      try:
          r = client.chat.completions.create(model="gpt-4", messages=msgs, max_tokens=1500, temperature=0.7)
          answer = r.choices[0].message.content.strip()
          conf = estimate_confidence(answer, context_str)
          final_ans = f"{answer}\n\n**Confidence Score:** {conf:.2f}%"
-         st.session_state["conversation_history"].append(("user", user_input))
          st.session_state["conversation_history"].append(("assistant", final_ans))
          # If the bot's response is a question, store it for evaluation
          if answer.endswith("?"):
