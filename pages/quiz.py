@@ -82,16 +82,26 @@ def preprocess_files(files):
     return f"Processed {processed_count} new file(s) successfully!"
 
 def load_context_for_file(file_name, top_k=10):
-    """Retrieve relevant chunks from the vector store for a given file."""
+    """Retrieve relevant content from a document for quiz generation."""
     collection_name = sanitize_collection_name(file_name)
     print(f"Loading context from collection: {collection_name}")
-    query = "key concepts, events, themes, or examples from the document"
-    print(f"Retrieving chunks for query: {query}")
+
+    # Query for broad content extraction (ensures variety in quiz questions)
+    query = "Summarize key concepts, definitions, and important details from this document."
+
     chunks = doc_service.retrieve_relevant_chunks(query, collection_name, top_k=top_k)
-    print(f"Retrieved {len(chunks)} chunks:")
-    for i, chunk in enumerate(chunks):
-        print(f"Chunk {i+1}: {chunk[:500]}")
-    return "\n\n".join(chunks) if chunks else "No relevant chunks found."
+
+    if not chunks:
+        print(f"ERROR: No relevant chunks found for {file_name}")
+        return "No relevant chunks found."
+
+    print(f"Retrieved {len(chunks)} chunks for quiz generation.")
+    
+    # Debugging: Print first 3 chunks to check retrieved content
+    for i, chunk in enumerate(chunks[:3]):
+        print(f"Chunk {i+1}: {chunk[:300]}")  # Print first 300 characters for preview
+
+    return "\n\n".join(chunks)
 
 def handle_answer_submission(q_index, labeled_options, correct_letter):
     """Handle user answer submission and update score."""
