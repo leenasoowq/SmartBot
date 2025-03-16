@@ -4,6 +4,8 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from sklearn.metrics.pairwise import cosine_similarity
 import docx2txt
+import numpy as np
+import re
 
 from services.language_service import LanguageService
 from services.document_service import DocumentService
@@ -16,13 +18,67 @@ lang_service = LanguageService(client)
 doc_service = DocumentService(client)
 embedding_model = doc_service.embedding_model
 
-for key in ["processed_files", "conversation_history", "quiz_mode", "selected_file"]:
+for key in ["processed_files", "conversation_history", "quiz_mode", "selected_file", "last_bot_question", "last_expected_answer"]:
     if key not in st.session_state:
         st.session_state[key] = (
             [] if key in ["processed_files", "conversation_history"] 
             else False if key == "quiz_mode"
-            else None
+            else None if key in ["selected_file", "last_expected_answer"]
+            else ""  # For last_bot_question
         )
+       
+MAX_HISTORY = 5  # Store only the last 10 messages
+
+def update_conversation_history(role, message):
+    """Append new message to conversation history while maintaining a fixed size."""
+    if role not in ["user", "assistant"]:
+        print(f"⚠️ Invalid role detected: {role}, message: {message}")  # Debugging info
+        return  # Ensure only valid roles are logged
+
+    print(f"Before update: {st.session_state['conversation_history']}")
+    st.session_state["conversation_history"].append((role, message))
+    
+    # Maintain history limit
+    if len(st.session_state["conversation_history"]) > MAX_HISTORY:
+        st.session_state["conversation_history"] = st.session_state["conversation_history"][-MAX_HISTORY:]
+    
+    print(f"After update: {st.session_state['conversation_history']}")
+
+def get_expected_answer(question: str) -> str:
+    """Retrieve document chunks and generate an answer using OpenAI, ensuring an answer is always provided."""
+
+    # Retrieve relevant document chunks
+    chunks = retrieve_relevant_chunks(question, top_k=20)
+    context_text = "\n\n".join(chunks) if chunks else ""  # If no chunks found, leave empty
+
+    msgs = [
+        {"role": "system", "content": (
+            "You are an expert AI assistant. Answer the question using the provided context as much as possible. "
+            "If the context is insufficient, generate a well-reasoned answer based on general knowledge."
+        )},
+        {"role": "user", "content": f"Context:\n{context_text}\n\nQuestion: {question}\nProvide only the answer."}
+    ]
+
+    try:
+        r = client.chat.completions.create(model="gpt-4", messages=msgs, max_tokens=100, temperature=0.2)
+        return r.choices[0].message.content.strip()
+    except Exception as e:
+        return "Error retrieving expected answer."
+        
+def evaluate_user_answer(user_answer: str, expected_answer: str) -> str:
+    """Evaluates user response against the expected answer using GPT-4."""
+    if user_answer.lower() in ["i don't know", "idk", "not sure"]:
+        return "Don't Know"
+    
+    msgs = [
+        {"role": "system", "content": "You evaluate if a response is correct. Reply only with 'Correct', 'Close', or 'Incorrect'."},
+        {"role": "user", "content": f"Expected: {expected_answer}\nUser: {user_answer}\nHow accurate is the user's response?"}
+    ]
+    try:
+        r = client.chat.completions.create(model="gpt-4", messages=msgs, max_tokens=10, temperature=0.2)
+        return r.choices[0].message.content.strip()
+    except Exception as e:
+        return "Evaluation Error"
 
 def sanitize_collection_name(file_name: str) -> str:
     """Sanitize file name for Chroma collection: alphanumeric, underscore, hyphen only."""
@@ -109,80 +165,213 @@ def estimate_confidence(llm_response: str, context_text: str) -> float:
         return 0.0
 
 def process_user_query():
-    user_input = st.session_state.user_query.strip()
-    if not user_input:
-        return
-    
-    if user_input.lower() == "summarise":
-        if not st.session_state["processed_files"]:
-            st.session_state["conversation_history"].append(("summarise", "No files uploaded."))
-            st.session_state.user_query = ""
-            return
-        fn = st.session_state["selected_file"]
-        if not fn:
-            st.session_state["conversation_history"].append(("summarise", "No file selected."))
-            st.session_state.user_query = ""
-            return
-        chunks = retrieve_relevant_chunks(fn)
-        context = "\n\n".join(chunks) if isinstance(chunks, list) else str(chunks)
-        msgs = [
-            {"role": "system", "content": "You are a knowledgeable assistant..."},
-            {"role": "user", "content": f"Provide a structured summary of **{fn}**.\n\nContext:\n{context}"}
-        ]
-        try:
-            r = client.chat.completions.create(model="gpt-4", messages=msgs, max_tokens=1500, temperature=0.3)
-            ans = r.choices[0].message.content.strip()
-            conf = estimate_confidence(ans, context)
-            final = f"**Summary of {fn}:**\n{ans}\n\n**Confidence Score:** {conf:.2f}%\n---\n"
-            st.session_state["conversation_history"].append(("summarize", final))
-        except Exception as e:
-            st.session_state["conversation_history"].append(("summarize", f"Error: {e}"))
-        st.session_state["user_query"] = ""
-        return
-    
-    chunks = retrieve_relevant_chunks(user_input)
-    context_str = "\n\n".join(chunks) if isinstance(chunks, list) else str(chunks)
-    msgs = [
-        {"role": "system", "content": "You are a knowledgeable assistant...Use only the 'Context' below."},
-        {"role": "user", "content": f"Context:\n{context_str}\n\nQuestion: {user_input}"}
-    ]
-    try:
-        r = client.chat.completions.create(model="gpt-4", messages=msgs, max_tokens=1500, temperature=0.7)
-        answer = r.choices[0].message.content.strip()
-        conf = estimate_confidence(answer, context_str)
-        final_ans = f"{answer}\n\n**Confidence Score:** {conf:.2f}%"
-        st.session_state["conversation_history"].append((user_input, final_ans))
-    except Exception as e:
-        st.session_state["conversation_history"].append((user_input, f"Error: {e}"))
-    st.session_state.user_query = ""
+     user_input = st.session_state.user_query.strip()
+     if not user_input:
+         return
+ 
+     if user_input.lower() == "summarise":
+         if not st.session_state["processed_files"]:
+             st.session_state["conversation_history"].append(("summarise", "No files uploaded."))
+             st.session_state.user_query = ""
+             return
+         fn = st.session_state["selected_file"]
+         if not fn:
+             st.session_state["conversation_history"].append(("summarise", "No file selected."))
+             st.session_state.user_query = ""
+             return
+         chunks = retrieve_relevant_chunks(fn)
+         context = "\n\n".join(chunks) if isinstance(chunks, list) else str(chunks)
+         msgs = [
+             {"role": "system", "content": "You are a knowledgeable assistant..."},
+             {"role": "user", "content": f"Provide a structured summary of **{fn}**.\n\nContext:\n{context}"}
+         ]
+         try:
+             r = client.chat.completions.create(model="gpt-4", messages=msgs, max_tokens=1500, temperature=0.3)
+             ans = r.choices[0].message.content.strip()
+             conf = estimate_confidence(ans, context)
+             final = f"**Summary of {fn}:**\n{ans}\n\n**Confidence Score:** {conf:.2f}%\n---\n"
+             st.session_state["conversation_history"].append(("user", final))
+         except Exception as e:
+             st.session_state["conversation_history"].append(("user", f"Error: {e}"))
+         st.session_state["user_query"] = ""
+         return
+ 
+         # Use OpenAI to determine if the user is asking for a test
+     classification_msgs = [
+         {"role": "system", "content": "You analyze user requests to determine if they are asking to be tested on a topic."},
+         {"role": "user", "content": f"Analyze this request and respond only with 'yes' or 'no': {user_input}"}
+     ]
+     try:
+         classification_response = client.chat.completions.create(
+             model="gpt-4", messages=classification_msgs, max_tokens=10, temperature=0.2
+         )
+         is_test_request = classification_response.choices[0].message.content.strip().lower()
+     except Exception as e:
+         st.session_state["conversation_history"].append((user_input, f"Error in classification: {e}"))
+         st.session_state.user_query = ""
+         return
+ 
+     if is_test_request == "yes":
+         file_name = st.session_state.get("selected_file", None)
+         if not file_name:
+             st.session_state["conversation_history"].append(("user", "No document is currently selected. Please upload or select a file first."))
+             st.session_state.user_query = ""
+             return
+ 
+         chunks = retrieve_relevant_chunks(file_name)
+         document_text = "\n\n".join(chunks) if isinstance(chunks, list) else str(chunks)
+ 
+         if not document_text.strip():
+             st.session_state["conversation_history"].append(("user", "Could not extract relevant content from the document."))
+             st.session_state.user_query = ""
+             return
+ 
+         msgs = [
+             {"role": "system", "content": (
+                 "You generate a single question based on the provided content. "
+                 "Ensure the question is relevant, fact-based, and answerable from the document. "
+                 "Do not ask about metadata such as author names, file details, document structure, or any non-content-related information."
+             )},
+             {"role": "user", "content": f"Generate exactly one question based on the following content:\n\n{document_text}"}
+         ]
+ 
+         try:
+             r = client.chat.completions.create(model="gpt-4", messages=msgs, max_tokens=100, temperature=0.7)
+             question = r.choices[0].message.content.strip().split("? ")[0] + "?"
+             st.session_state["conversation_history"].append(("Test Request", f"Here is your test question:\n\n**{question}**\n\nNote, I can only generate one question at a time and cannot generate multiple-choice questions MCQs."))
+             st.session_state["last_bot_question"] = question
+             st.session_state["last_expected_answer"] = get_expected_answer(question)
+         except Exception as e:
+             st.session_state["conversation_history"].append(("Test Request", f"Error: {e}"))
+ 
+         st.session_state.user_query = ""
+         return
+ 
+     if st.session_state["last_bot_question"] and st.session_state["last_expected_answer"]:
+         evaluation = evaluate_user_answer(user_input, st.session_state["last_expected_answer"])
+ 
+         if evaluation == "Don't Know":
+             correct_answer = st.session_state["last_expected_answer"]
+             feedback = f"You didn't know the answer. Here is the correct answer:\n\n**{correct_answer}**"
+         elif evaluation == "Incorrect":
+             correct_answer = st.session_state["last_expected_answer"]
+             feedback = f"**Evaluation:** {evaluation}\n\nThe correct answer is: {correct_answer}"
+         else:
+             feedback = f"**Evaluation:** {evaluation}"
+ 
+         st.session_state["conversation_history"].append((user_input, feedback))
+         st.session_state["last_bot_question"] = ""
+         st.session_state["last_expected_answer"] = ""
+         st.session_state.user_query = ""
+         return
+ 
+     chunks = retrieve_relevant_chunks(user_input)
+     context_str = "\n\n".join(chunks) if isinstance(chunks, list) else str(chunks)
+     msgs = [{"role": "system", "content": 
+    "You are a knowledgeable assistant... Use only the variety of available 'Context' below while maintaining conversational memory. "
+    "Ensure quiz questions cover different topics if multiple contexts are available."}]
+
+     # Append last 5 messages but **skip evaluation-related messages and invalid roles**
+     for role, message in st.session_state["conversation_history"][-5:]:
+         if "Evaluation:" not in message and "Correct Answer:" not in message:
+             msgs.append({"role": "user" if role == "user" else "assistant", "content": message})
+
+     # Add the new user query
+     msgs.append({"role": "user", "content": user_input})
+     
+     try:
+         r = client.chat.completions.create(model="gpt-4", messages=msgs, max_tokens=1500, temperature=0.7)
+         answer = r.choices[0].message.content.strip()
+         conf = estimate_confidence(answer, context_str)
+         final_ans = f"{answer}\n\n**Confidence Score:** {conf:.2f}%"
+         st.session_state["conversation_history"].append(("assistant", final_ans))
+         # If the bot's response is a question, store it for evaluation
+         if answer.endswith("?"):
+             st.session_state["last_bot_question"] = answer
+             st.session_state["last_expected_answer"] = get_expected_answer(answer)
+     except Exception as e:
+         update_conversation_history("assistant", f"Error: {e}")
+     st.session_state.user_query = ""
 
 st.title("🤖 Your Academic Chatbot")
 
+# Ensure session state variables exist
+if "uploading" not in st.session_state:
+    st.session_state["uploading"] = False
+if "files_to_upload" not in st.session_state:
+    st.session_state["files_to_upload"] = None
+if "uploader_key" not in st.session_state:
+    st.session_state["uploader_key"] = 0  # Initialize key for uploader
+
+# Custom CSS to disable UI when uploading
+if st.session_state["uploading"]:
+    st.markdown(
+        """
+        <style>
+        [data-testid="stSidebar"], .block-container {
+            pointer-events: none !important;
+            opacity: 0.5 !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
 with st.sidebar:
     st.subheader("Upload Files")
-    files = st.file_uploader(
+
+    # File uploader (Forces reset by changing key)
+    uploaded_files = st.file_uploader(
         "Upload PDF, DOC, DOCX, or TXT",
         type=["pdf", "txt", "doc", "docx"],
-        accept_multiple_files=True
+        accept_multiple_files=True,
+        key=f"file_uploader_{st.session_state['uploader_key']}"  # Unique key to refresh uploader
     )
-    if files:
-        msg = preprocess_files(files)
-        st.success(msg)
 
+    # Store files in session state until "Upload" is clicked
+    if uploaded_files:
+        st.session_state["files_to_upload"] = uploaded_files
+
+    # Upload button (Only appears if files are selected)
+    if st.session_state["files_to_upload"]:
+        if st.button("Upload", disabled=st.session_state["uploading"]):
+            st.session_state["uploading"] = True  # Lock UI
+            with st.spinner("Processing files... Please wait!"):
+                msg = preprocess_files(st.session_state["files_to_upload"])  # Process files
+
+            st.success(msg)
+
+            # 🔹 Reset file uploader and remove upload button
+            st.session_state["files_to_upload"] = None  # Clear stored files
+            st.session_state["uploading"] = False  # Unlock UI
+            
+            # 🔹 Force reset of file uploader by changing key
+            st.session_state["uploader_key"] += 1  
+            st.rerun()  # Force UI update
+
+    # Disable file selection while uploading
     if st.session_state["processed_files"]:
         st.subheader("Available Files")
         st.session_state["selected_file"] = st.selectbox(
             "Select a file",
-            st.session_state["processed_files"]
+            st.session_state["processed_files"],
+            disabled=st.session_state["uploading"]
         )
 
+# Ensure UI unlocks properly before chatbot is rendered
+if st.session_state["uploading"]:
+    st.stop()  # Prevents rendering while upload is happening
+
+# Chatbot UI - Locked during upload
 st.header("Chat History")
-for user_msg, bot_msg in st.session_state["conversation_history"]:
+for user_msg, bot_msg in st.session_state.get("conversation_history", []):
     st.markdown(f"**🧑‍💻 You:** {user_msg}")
     st.markdown(f"**🤖 ChatBot:**\n\n{bot_msg}")
 
+# Ensure text input is only disabled during upload
 st.text_input(
     "Enter your query:",
     key="user_query",
-    on_change=process_user_query
+    on_change=process_user_query,
+    disabled=st.session_state["uploading"]
 )

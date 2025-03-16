@@ -6,3 +6,4 @@ scikit-learn
 pydub
 chromadb
 langchain_community
+nbformat
