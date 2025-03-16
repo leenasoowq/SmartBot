@@ -108,60 +108,11 @@ def estimate_confidence(llm_response: str, context_text: str) -> float:
     except Exception:
         return 0.0
 
-# def process_user_query():
-#     user_input = st.session_state.user_query.strip()
-#     if not user_input:
-#         return
-    
-#     if user_input.lower() == "summarise":
-#         if not st.session_state["processed_files"]:
-#             st.session_state["conversation_history"].append(("summarise", "No files uploaded."))
-#             st.session_state.user_query = ""
-#             return
-#         fn = st.session_state["selected_file"]
-#         if not fn:
-#             st.session_state["conversation_history"].append(("summarise", "No file selected."))
-#             st.session_state.user_query = ""
-#             return
-#         chunks = retrieve_relevant_chunks(fn)
-#         context = "\n\n".join(chunks) if isinstance(chunks, list) else str(chunks)
-#         msgs = [
-#             {"role": "system", "content": "You are a knowledgeable assistant..."},
-#             {"role": "user", "content": f"Provide a structured summary of **{fn}**.\n\nContext:\n{context}"}
-#         ]
-#         try:
-#             r = client.chat.completions.create(model="gpt-4", messages=msgs, max_tokens=1500, temperature=0.3)
-#             ans = r.choices[0].message.content.strip()
-#             conf = estimate_confidence(ans, context)
-#             final = f"**Summary of {fn}:**\n{ans}\n\n**Confidence Score:** {conf:.2f}%\n---\n"
-#             st.session_state["conversation_history"].append(("summarize", final))
-#         except Exception as e:
-#             st.session_state["conversation_history"].append(("summarize", f"Error: {e}"))
-#         st.session_state["user_query"] = ""
-#         return
-    
-#     chunks = retrieve_relevant_chunks(user_input)
-#     context_str = "\n\n".join(chunks) if isinstance(chunks, list) else str(chunks)
-#     msgs = [
-#         {"role": "system", "content": "You are a knowledgeable assistant...Use only the 'Context' below."},
-#         {"role": "user", "content": f"Context:\n{context_str}\n\nQuestion: {user_input}"}
-#     ]
-#     try:
-#         r = client.chat.completions.create(model="gpt-4", messages=msgs, max_tokens=1500, temperature=0.7)
-#         answer = r.choices[0].message.content.strip()
-#         conf = estimate_confidence(answer, context_str)
-#         final_ans = f"{answer}\n\n**Confidence Score:** {conf:.2f}%"
-#         st.session_state["conversation_history"].append((user_input, final_ans))
-#     except Exception as e:
-#         st.session_state["conversation_history"].append((user_input, f"Error: {e}"))
-#     st.session_state.user_query = ""
-
 def process_user_query():
     user_input = st.session_state.user_query.strip()
     if not user_input:
         return
     
-    # Summarization Mode
     if user_input.lower() == "summarise":
         if not st.session_state["processed_files"]:
             st.session_state["conversation_history"].append(("summarise", "No files uploaded."))
@@ -174,52 +125,35 @@ def process_user_query():
             return
         chunks = retrieve_relevant_chunks(fn)
         context = "\n\n".join(chunks) if isinstance(chunks, list) else str(chunks)
-        
-        # Preserve previous interactions
-        conversation_history = [
-            {"role": "system", "content": "You are a knowledgeable assistant..."}
+        msgs = [
+            {"role": "system", "content": "You are a knowledgeable assistant..."},
+            {"role": "user", "content": f"Provide a structured summary of **{fn}**.\n\nContext:\n{context}"}
         ]
-        for user_msg, bot_msg in st.session_state["conversation_history"][-5:]:
-            conversation_history.append({"role": "user", "content": user_msg})
-            conversation_history.append({"role": "assistant", "content": bot_msg})
-        
-        conversation_history.append({"role": "user", "content": f"Provide a structured summary of **{fn}**.\n\nContext:\n{context}"})
-        
         try:
-            r = client.chat.completions.create(model="gpt-4", messages=conversation_history, max_tokens=1500, temperature=0)
+            r = client.chat.completions.create(model="gpt-4", messages=msgs, max_tokens=1500, temperature=0.3)
             ans = r.choices[0].message.content.strip()
             conf = estimate_confidence(ans, context)
             final = f"**Summary of {fn}:**\n{ans}\n\n**Confidence Score:** {conf:.2f}%\n---\n"
             st.session_state["conversation_history"].append(("summarize", final))
         except Exception as e:
             st.session_state["conversation_history"].append(("summarize", f"Error: {e}"))
-        
-        st.session_state.user_query = ""
+        st.session_state["user_query"] = ""
         return
     
-    # Regular Query Processing
     chunks = retrieve_relevant_chunks(user_input)
     context_str = "\n\n".join(chunks) if isinstance(chunks, list) else str(chunks)
-    
-    # Preserve conversation history
-    conversation_history = [
-        {"role": "system", "content": "You are a knowledgeable assistant...Use only the 'Context' below."}
+    msgs = [
+        {"role": "system", "content": "You are a knowledgeable assistant...Use only the 'Context' below."},
+        {"role": "user", "content": f"Context:\n{context_str}\n\nQuestion: {user_input}"}
     ]
-    for user_msg, bot_msg in st.session_state["conversation_history"][-5:]:  # Store last 5 interactions
-        conversation_history.append({"role": "user", "content": user_msg})
-        conversation_history.append({"role": "assistant", "content": bot_msg})
-    
-    conversation_history.append({"role": "user", "content": f"Context:\n{context_str}\n\nQuestion: {user_input}"})
-    
     try:
-        r = client.chat.completions.create(model="gpt-4", messages=conversation_history, max_tokens=1500, temperature=0.7)
+        r = client.chat.completions.create(model="gpt-4", messages=msgs, max_tokens=1500, temperature=0.7)
         answer = r.choices[0].message.content.strip()
         conf = estimate_confidence(answer, context_str)
         final_ans = f"{answer}\n\n**Confidence Score:** {conf:.2f}%"
         st.session_state["conversation_history"].append((user_input, final_ans))
     except Exception as e:
         st.session_state["conversation_history"].append((user_input, f"Error: {e}"))
-    
     st.session_state.user_query = ""
 
 st.title("🤖 Your Academic Chatbot")
