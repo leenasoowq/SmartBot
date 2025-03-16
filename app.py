@@ -8,14 +8,14 @@ import numpy as np
 import re
 
 from services.language_service import LanguageService
-from services.document_service import DocumentService  # Your provided DocumentService
+from services.document_service import DocumentService
 
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 lang_service = LanguageService(client)
-doc_service = DocumentService(client)  # Initialize with default settings
+doc_service = DocumentService(client)
 embedding_model = doc_service.embedding_model
 
 # Initialize session state
@@ -28,7 +28,7 @@ for key in ["processed_files", "conversation_history", "quiz_mode", "selected_fi
             else ""  # For last_bot_question
         )
 
-MAX_HISTORY = 5  # Store only the last 5 messages
+MAX_HISTORY = 5
 
 def update_conversation_history(role, message):
     """Append new message to conversation history while maintaining a fixed size."""
@@ -151,7 +151,7 @@ def estimate_confidence(llm_response: str, context_text: str) -> float:
         return 0.0
 
 def process_response(user_input):
-    """Process the user's query and generate a response."""
+    """Process the user's query and generate a response with source attribution."""
     if not user_input.strip():
         return
 
@@ -171,7 +171,8 @@ def process_response(user_input):
         context = "\n\n".join(chunks)
         msgs = [
             {"role": "system", "content": (
-                "You are a knowledgeable assistant. Provide a concise, structured summary of the document content provided below."
+                "You are a knowledgeable assistant. Provide a concise, structured summary of the document content provided below. "
+                "Base your summary strictly on the provided context and indicate if the context is insufficient."
             )},
             {"role": "user", "content": f"Document: {fn}\n\nContent:\n{context}\n\nSummarize the document in a clear and concise manner."}
         ]
@@ -179,11 +180,27 @@ def process_response(user_input):
             r = client.chat.completions.create(model="gpt-4", messages=msgs, max_tokens=1500, temperature=0.3)
             summary = r.choices[0].message.content.strip()
             conf = estimate_confidence(summary, context)
-            final_response = f"**Summary of {fn}:**\n{summary}\n\n**Confidence Score:** {conf:.2f}%"
+            final_response = (
+                f"**Summary of {fn}:**\n{summary}\n\n"
+                f"**Source:** Extracted from document chunks (Confidence: {conf:.2f}%)\n"
+                f"{'[Note: Low confidence may indicate reliance on general knowledge]' if conf < 70 else ''}"
+            )
+            with st.expander("View Retrieved Chunks"):
+                for i, chunk in enumerate(chunks[:5]):  # Show first 5 chunks for brevity
+                    st.write(f"Chunk {i+1}: {chunk[:200]}...")  # Truncate for display
             update_conversation_history("assistant", final_response)
         except Exception as e:
             update_conversation_history("assistant", f"Error generating summary: {e}")
         return
+
+    # General Q&A or Quiz Logic
+    chunks = retrieve_relevant_chunks(user_input)
+    context_str = "\n\n".join(chunks) if isinstance(chunks, list) else str(chunks)
+    if not chunks or "No relevant chunks found" in context_str or "Error" in context_str:
+        context_str = ""
+        fallback_note = "\n\n**Note:** No relevant document content found; response based on general knowledge."
+    else:
+        fallback_note = ""
 
     classification_msgs = [
         {"role": "system", "content": "You analyze user requests to determine if they are asking to be tested on a topic."},
@@ -240,18 +257,34 @@ def process_response(user_input):
         st.session_state["last_expected_answer"] = ""
         return
 
-    chunks = retrieve_relevant_chunks(user_input)
-    context_str = "\n\n".join(chunks) if isinstance(chunks, list) else str(chunks)
-    msgs = [{"role": "system", "content": "You are a knowledgeable assistant. Use only the provided context."}]
+    # General Q&A
+    msgs = [
+        {"role": "system", "content": (
+            "You are a knowledgeable assistant. Use only the provided context to answer the query. "
+            "If the context is empty or insufficient, indicate that the answer is based on general knowledge."
+        )}
+    ]
     for role, message in st.session_state["conversation_history"][-5:]:
         if "Evaluation:" not in message and "Correct Answer:" not in message:
             msgs.append({"role": role, "content": message})
-    msgs.append({"role": "user", "content": user_input})
+    msgs.append({"role": "user", "content": f"Context:\n{context_str}\n\nQuery: {user_input}"})
+    
     try:
         r = client.chat.completions.create(model="gpt-4", messages=msgs, max_tokens=1500, temperature=0.7)
         answer = r.choices[0].message.content.strip()
-        conf = estimate_confidence(answer, context_str)
-        final_ans = f"{answer}\n\n**Confidence Score:** {conf:.2f}%"
+        conf = estimate_confidence(answer, context_str) if context_str else 0.0
+        source_note = (
+            f"**Source:** Extracted from document chunks (Confidence: {conf:.2f}%)"
+            if context_str else "**Source:** General knowledge (No relevant document content found)"
+        )
+        final_ans = f"{answer}\n\n{source_note}{fallback_note if not context_str else ''}"
+        
+        # Optional: Show retrieved chunks in an expander
+        if context_str:
+            with st.expander("View Retrieved Chunks"):
+                for i, chunk in enumerate(chunks[:5]):  # Limit to 5 for brevity
+                    st.write(f"Chunk {i+1}: {chunk[:200]}...")  # Truncate for display
+        
         update_conversation_history("assistant", final_ans)
         if answer.endswith("?"):
             st.session_state["last_bot_question"] = answer
@@ -325,14 +358,13 @@ with chat_container:
 # Dynamic Chat Input
 prompt = st.chat_input("Enter your query:", disabled=st.session_state["uploading"])
 if prompt:
-    # Immediately display the user's input
     update_conversation_history("user", prompt)
-    st.session_state["pending_response"] = prompt  # Store the input for response processing
+    st.session_state["pending_response"] = prompt
     st.rerun()
 
 # Process the response if there's a pending input
 if st.session_state["pending_response"]:
     with st.spinner("Thinking..."):
         process_response(st.session_state["pending_response"])
-    st.session_state["pending_response"] = None  # Clear the pending response
+    st.session_state["pending_response"] = None
     st.rerun()
