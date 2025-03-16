@@ -19,13 +19,12 @@ doc_service = DocumentService(client)
 embedding_model = doc_service.embedding_model
 
 # Initialize session state
-for key in ["processed_files", "conversation_history", "quiz_mode", "selected_file", "last_bot_question", "last_expected_answer", "pending_response"]:
+for key in ["processed_files", "conversation_history", "selected_file", "pending_response"]:
     if key not in st.session_state:
         st.session_state[key] = (
             [] if key in ["processed_files", "conversation_history"] 
-            else False if key == "quiz_mode"
-            else None if key in ["selected_file", "last_expected_answer", "pending_response"]
-            else ""  # For last_bot_question
+            else None if key in ["selected_file", "pending_response"]
+            else ""  # Placeholder for consistency
         )
 
 MAX_HISTORY = 5
@@ -38,37 +37,6 @@ def update_conversation_history(role, message):
     st.session_state["conversation_history"].append((role, message))
     if len(st.session_state["conversation_history"]) > MAX_HISTORY:
         st.session_state["conversation_history"] = st.session_state["conversation_history"][-MAX_HISTORY:]
-
-def get_expected_answer(question: str) -> str:
-    """Retrieve document chunks and generate an answer using OpenAI."""
-    chunks = retrieve_relevant_chunks(question, top_k=20)
-    context_text = "\n\n".join(chunks) if chunks else ""
-    msgs = [
-        {"role": "system", "content": (
-            "You are an expert AI assistant. Answer the question using the provided context as much as possible. "
-            "If the context is insufficient, generate a well-reasoned answer based on general knowledge."
-        )},
-        {"role": "user", "content": f"Context:\n{context_text}\n\nQuestion: {question}\nProvide only the answer."}
-    ]
-    try:
-        r = client.chat.completions.create(model="gpt-4", messages=msgs, max_tokens=100, temperature=0.2)
-        return r.choices[0].message.content.strip()
-    except Exception as e:
-        return "Error retrieving expected answer."
-
-def evaluate_user_answer(user_answer: str, expected_answer: str) -> str:
-    """Evaluates user response against the expected answer."""
-    if user_answer.lower() in ["i don't know", "idk", "not sure"]:
-        return "Don't Know"
-    msgs = [
-        {"role": "system", "content": "You evaluate if a response is correct. Reply only with 'Correct', 'Close', or 'Incorrect'."},
-        {"role": "user", "content": f"Expected: {expected_answer}\nUser: {user_answer}\nHow accurate is the user's response?"}
-    ]
-    try:
-        r = client.chat.completions.create(model="gpt-4", messages=msgs, max_tokens=10, temperature=0.2)
-        return r.choices[0].message.content.strip()
-    except Exception as e:
-        return "Evaluation Error"
 
 def sanitize_collection_name(file_name: str) -> str:
     """Sanitize file name for Chroma collection."""
@@ -151,144 +119,39 @@ def estimate_confidence(llm_response: str, context_text: str) -> float:
         return 0.0
 
 def process_response(user_input):
-    """Process the user's query and generate a response with source attribution."""
+    """Process the user's query and generate a response."""
     if not user_input.strip():
         return
 
-    if user_input.lower() == "summarise":
-        if not st.session_state["processed_files"]:
-            update_conversation_history("assistant", "No files uploaded.")
-            return
-        fn = st.session_state["selected_file"]
-        if not fn:
-            update_conversation_history("assistant", "No file selected.")
-            return
-        collection_name = sanitize_collection_name(fn)
-        chunks = doc_service.retrieve_relevant_chunks(query=fn, collection_name=collection_name, top_k=100)
-        if not chunks or "Error" in chunks[0]:
-            update_conversation_history("assistant", "Could not retrieve document content for summarization.")
-            return
-        context = "\n\n".join(chunks)
-        msgs = [
-            {"role": "system", "content": (
-                "You are a knowledgeable assistant. Provide a concise, structured summary of the document content provided below. "
-                "Base your summary strictly on the provided context and indicate if the context is insufficient."
-            )},
-            {"role": "user", "content": f"Document: {fn}\n\nContent:\n{context}\n\nSummarize the document in a clear and concise manner."}
-        ]
-        try:
-            r = client.chat.completions.create(model="gpt-4", messages=msgs, max_tokens=1500, temperature=0.3)
-            summary = r.choices[0].message.content.strip()
-            conf = estimate_confidence(summary, context)
-            final_response = (
-                f"**Summary of {fn}:**\n{summary}\n\n"
-                f"**Source:** Extracted from document chunks (Confidence: {conf:.2f}%)\n"
-                f"{'[Note: Low confidence may indicate reliance on general knowledge]' if conf < 70 else ''}"
-            )
-            with st.expander("View Retrieved Chunks"):
-                for i, chunk in enumerate(chunks[:5]):  # Show first 5 chunks for brevity
-                    st.write(f"Chunk {i+1}: {chunk[:200]}...")  # Truncate for display
-            update_conversation_history("assistant", final_response)
-        except Exception as e:
-            update_conversation_history("assistant", f"Error generating summary: {e}")
+    # Ensure files are uploaded and selected
+    if not st.session_state["processed_files"]:
+        update_conversation_history("assistant", "No files uploaded.")
+        return
+    fn = st.session_state.get("selected_file", None)
+    if not fn:
+        update_conversation_history("assistant", "No file selected.")
         return
 
-    # General Q&A or Quiz Logic
-    chunks = retrieve_relevant_chunks(user_input)
-    context_str = "\n\n".join(chunks) if isinstance(chunks, list) else str(chunks)
-    if not chunks or "No relevant chunks found" in context_str or "Error" in context_str:
-        context_str = ""
-        fallback_note = "\n\n**Note:** No relevant document content found; response based on general knowledge."
-    else:
-        fallback_note = ""
-
-    classification_msgs = [
-        {"role": "system", "content": "You analyze user requests to determine if they are asking to be tested on a topic."},
-        {"role": "user", "content": f"Analyze this request and respond only with 'yes' or 'no': {user_input}"}
-    ]
-    try:
-        classification_response = client.chat.completions.create(
-            model="gpt-4", messages=classification_msgs, max_tokens=10, temperature=0.2
-        )
-        is_test_request = classification_response.choices[0].message.content.strip().lower()
-    except Exception as e:
-        update_conversation_history("assistant", f"Error in classification: {e}")
+    # Ensure the document text is retrieved
+    chunks = retrieve_relevant_chunks(fn)
+    if not chunks or "No relevant chunks found" in chunks:
+        update_conversation_history("assistant", "I couldn't extract relevant content from the document.")
         return
 
-    if is_test_request == "yes":
-        file_name = st.session_state.get("selected_file", None)
-        if not file_name:
-            update_conversation_history("assistant", "No document is currently selected. Please upload or select a file first.")
-            return
-        chunks = retrieve_relevant_chunks(file_name)
-        document_text = "\n\n".join(chunks) if isinstance(chunks, list) else str(chunks)
-        if not document_text.strip():
-            update_conversation_history("assistant", "Could not extract relevant content from the document.")
-            return
-        msgs = [
-            {"role": "system", "content": (
-                "You generate a single question based on the provided content. "
-                "Ensure the question is relevant, fact-based, and answerable from the document."
-            )},
-            {"role": "user", "content": f"Generate exactly one question based on the following content:\n\n{document_text}"}
-        ]
-        try:
-            r = client.chat.completions.create(model="gpt-4", messages=msgs, max_tokens=100, temperature=0.7)
-            question = r.choices[0].message.content.strip().split("? ")[0] + "?"
-            update_conversation_history("assistant", f"Here is your test question:\n\n**{question}**\n\nNote: I can only generate one question at a time.")
-            st.session_state["last_bot_question"] = question
-            st.session_state["last_expected_answer"] = get_expected_answer(question)
-        except Exception as e:
-            update_conversation_history("assistant", f"Error: {e}")
-        return
+    context = "\n\n".join(chunks) if isinstance(chunks, list) else str(chunks)
 
-    if st.session_state["last_bot_question"] and st.session_state["last_expected_answer"]:
-        evaluation = evaluate_user_answer(user_input, st.session_state["last_expected_answer"])
-        if evaluation == "Don't Know":
-            correct_answer = st.session_state["last_expected_answer"]
-            feedback = f"You didn't know the answer. Here is the correct answer:\n\n**{correct_answer}**"
-        elif evaluation == "Incorrect":
-            correct_answer = st.session_state["last_expected_answer"]
-            feedback = f"**Evaluation:** {evaluation}\n\nThe correct answer is: {correct_answer}"
-        else:
-            feedback = f"**Evaluation:** {evaluation}"
-        update_conversation_history("assistant", feedback)
-        st.session_state["last_bot_question"] = ""
-        st.session_state["last_expected_answer"] = ""
-        return
-
-    # General Q&A
+    # Construct prompt for GPT (no duplicate logging here)
     msgs = [
-        {"role": "system", "content": (
-            "You are a knowledgeable assistant. Use only the provided context to answer the query. "
-            "If the context is empty or insufficient, indicate that the answer is based on general knowledge."
-        )}
+        {"role": "system", "content": "You are a knowledgeable assistant. Answer using the document context."},
+        {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {user_input}"}
     ]
-    for role, message in st.session_state["conversation_history"][-5:]:
-        if "Evaluation:" not in message and "Correct Answer:" not in message:
-            msgs.append({"role": role, "content": message})
-    msgs.append({"role": "user", "content": f"Context:\n{context_str}\n\nQuery: {user_input}"})
-    
+
     try:
         r = client.chat.completions.create(model="gpt-4", messages=msgs, max_tokens=1500, temperature=0.7)
         answer = r.choices[0].message.content.strip()
-        conf = estimate_confidence(answer, context_str) if context_str else 0.0
-        source_note = (
-            f"**Source:** Extracted from document chunks (Confidence: {conf:.2f}%)"
-            if context_str else "**Source:** General knowledge (No relevant document content found)"
-        )
-        final_ans = f"{answer}\n\n{source_note}{fallback_note if not context_str else ''}"
-        
-        # Optional: Show retrieved chunks in an expander
-        if context_str:
-            with st.expander("View Retrieved Chunks"):
-                for i, chunk in enumerate(chunks[:5]):  # Limit to 5 for brevity
-                    st.write(f"Chunk {i+1}: {chunk[:200]}...")  # Truncate for display
-        
+        conf = estimate_confidence(answer, context)
+        final_ans = f"{answer}\n\n**Confidence Score:** {conf:.2f}%"
         update_conversation_history("assistant", final_ans)
-        if answer.endswith("?"):
-            st.session_state["last_bot_question"] = answer
-            st.session_state["last_expected_answer"] = get_expected_answer(answer)
     except Exception as e:
         update_conversation_history("assistant", f"Error: {e}")
 
@@ -358,6 +221,7 @@ with chat_container:
 # Dynamic Chat Input
 prompt = st.chat_input("Enter your query:", disabled=st.session_state["uploading"])
 if prompt:
+    # Log the user input only once here
     update_conversation_history("user", prompt)
     st.session_state["pending_response"] = prompt
     st.rerun()
