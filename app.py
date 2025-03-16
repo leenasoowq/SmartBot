@@ -8,23 +8,23 @@ import numpy as np
 import re
 
 from services.language_service import LanguageService
-from services.document_service import DocumentService
+from services.document_service import DocumentService  # Your provided DocumentService
 
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 lang_service = LanguageService(client)
-doc_service = DocumentService(client)
+doc_service = DocumentService(client)  # Initialize with default settings
 embedding_model = doc_service.embedding_model
 
 # Initialize session state
-for key in ["processed_files", "conversation_history", "quiz_mode", "selected_file", "last_bot_question", "last_expected_answer"]:
+for key in ["processed_files", "conversation_history", "quiz_mode", "selected_file", "last_bot_question", "last_expected_answer", "pending_response"]:
     if key not in st.session_state:
         st.session_state[key] = (
             [] if key in ["processed_files", "conversation_history"] 
             else False if key == "quiz_mode"
-            else None if key in ["selected_file", "last_expected_answer"]
+            else None if key in ["selected_file", "last_expected_answer", "pending_response"]
             else ""  # For last_bot_question
         )
 
@@ -150,38 +150,39 @@ def estimate_confidence(llm_response: str, context_text: str) -> float:
     except Exception:
         return 0.0
 
-def process_user_query(user_input):
+def process_response(user_input):
     """Process the user's query and generate a response."""
     if not user_input.strip():
         return
 
-    update_conversation_history("user", user_input)
-
     if user_input.lower() == "summarise":
         if not st.session_state["processed_files"]:
             update_conversation_history("assistant", "No files uploaded.")
-            st.rerun()  # Force UI update
             return
         fn = st.session_state["selected_file"]
         if not fn:
             update_conversation_history("assistant", "No file selected.")
-            st.rerun()  # Force UI update
             return
-        chunks = retrieve_relevant_chunks(fn)
-        context = "\n\n".join(chunks) if isinstance(chunks, list) else str(chunks)
+        collection_name = sanitize_collection_name(fn)
+        chunks = doc_service.retrieve_relevant_chunks(query=fn, collection_name=collection_name, top_k=100)
+        if not chunks or "Error" in chunks[0]:
+            update_conversation_history("assistant", "Could not retrieve document content for summarization.")
+            return
+        context = "\n\n".join(chunks)
         msgs = [
-            {"role": "system", "content": "You are a knowledgeable assistant."},
-            {"role": "user", "content": f"Provide a structured summary of **{fn}**.\n\nContext:\n{context}"}
+            {"role": "system", "content": (
+                "You are a knowledgeable assistant. Provide a concise, structured summary of the document content provided below."
+            )},
+            {"role": "user", "content": f"Document: {fn}\n\nContent:\n{context}\n\nSummarize the document in a clear and concise manner."}
         ]
         try:
             r = client.chat.completions.create(model="gpt-4", messages=msgs, max_tokens=1500, temperature=0.3)
-            ans = r.choices[0].message.content.strip()
-            conf = estimate_confidence(ans, context)
-            final = f"**Summary of {fn}:**\n{ans}\n\n**Confidence Score:** {conf:.2f}%\n---\n"
-            update_conversation_history("assistant", final)
+            summary = r.choices[0].message.content.strip()
+            conf = estimate_confidence(summary, context)
+            final_response = f"**Summary of {fn}:**\n{summary}\n\n**Confidence Score:** {conf:.2f}%"
+            update_conversation_history("assistant", final_response)
         except Exception as e:
-            update_conversation_history("assistant", f"Error: {e}")
-        st.rerun()  # Force UI update
+            update_conversation_history("assistant", f"Error generating summary: {e}")
         return
 
     classification_msgs = [
@@ -195,20 +196,17 @@ def process_user_query(user_input):
         is_test_request = classification_response.choices[0].message.content.strip().lower()
     except Exception as e:
         update_conversation_history("assistant", f"Error in classification: {e}")
-        st.rerun()  # Force UI update
         return
 
     if is_test_request == "yes":
         file_name = st.session_state.get("selected_file", None)
         if not file_name:
             update_conversation_history("assistant", "No document is currently selected. Please upload or select a file first.")
-            st.rerun()  # Force UI update
             return
         chunks = retrieve_relevant_chunks(file_name)
         document_text = "\n\n".join(chunks) if isinstance(chunks, list) else str(chunks)
         if not document_text.strip():
             update_conversation_history("assistant", "Could not extract relevant content from the document.")
-            st.rerun()  # Force UI update
             return
         msgs = [
             {"role": "system", "content": (
@@ -225,7 +223,6 @@ def process_user_query(user_input):
             st.session_state["last_expected_answer"] = get_expected_answer(question)
         except Exception as e:
             update_conversation_history("assistant", f"Error: {e}")
-        st.rerun()  # Force UI update
         return
 
     if st.session_state["last_bot_question"] and st.session_state["last_expected_answer"]:
@@ -241,7 +238,6 @@ def process_user_query(user_input):
         update_conversation_history("assistant", feedback)
         st.session_state["last_bot_question"] = ""
         st.session_state["last_expected_answer"] = ""
-        st.rerun()  # Force UI update
         return
 
     chunks = retrieve_relevant_chunks(user_input)
@@ -262,7 +258,6 @@ def process_user_query(user_input):
             st.session_state["last_expected_answer"] = get_expected_answer(answer)
     except Exception as e:
         update_conversation_history("assistant", f"Error: {e}")
-    st.rerun()  # Force UI update
 
 # UI Setup
 st.title("🤖 Your Academic Chatbot")
@@ -330,4 +325,14 @@ with chat_container:
 # Dynamic Chat Input
 prompt = st.chat_input("Enter your query:", disabled=st.session_state["uploading"])
 if prompt:
-    process_user_query(prompt)
+    # Immediately display the user's input
+    update_conversation_history("user", prompt)
+    st.session_state["pending_response"] = prompt  # Store the input for response processing
+    st.rerun()
+
+# Process the response if there's a pending input
+if st.session_state["pending_response"]:
+    with st.spinner("Thinking..."):
+        process_response(st.session_state["pending_response"])
+    st.session_state["pending_response"] = None  # Clear the pending response
+    st.rerun()
