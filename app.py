@@ -31,11 +31,17 @@ for key in ["processed_files", "conversation_history", "quiz_mode", "selected_fi
 MAX_HISTORY = 50
 
 def update_conversation_history(role, message):
-    """Append new message to conversation history while maintaining a fixed size."""
+    """Append new message to conversation history and store last bot response."""
     if role not in ["user", "assistant"]:
         print(f"⚠️ Invalid role detected: {role}, message: {message}")
         return
+    
     st.session_state["conversation_history"].append((role, message))
+    
+    # Store last bot response explicitly for follow-ups
+    if role == "assistant":
+        st.session_state["last_bot_answer"] = message  # Store last bot answer
+
     if len(st.session_state["conversation_history"]) > MAX_HISTORY:
         st.session_state["conversation_history"] = st.session_state["conversation_history"][-MAX_HISTORY:]
 
@@ -69,6 +75,33 @@ def evaluate_user_answer(user_answer: str, expected_answer: str) -> str:
         return r.choices[0].message.content.strip()
     except Exception as e:
         return "Evaluation Error"
+
+def is_follow_up(user_input: str) -> bool:
+    """Determine if the user input is a follow-up question based on previous context."""
+    last_bot_response = st.session_state.get("last_bot_answer", None)
+    
+    if not last_bot_response:
+        return False  # If there's no last bot response, it's not a follow-up.
+
+    classification_msgs = [
+        {"role": "system", "content": "You analyze user queries to determine if they are follow-up questions. "
+                                      "A follow-up question refers to the previous response and asks for clarification, elaboration, or continuation. "
+                                      "Respond with only 'yes' or 'no'."},
+        {"role": "assistant", "content": last_bot_response},  # Pass the last response
+        {"role": "user", "content": user_input}
+    ]
+
+    try:
+        r = client.chat.completions.create(
+            model="gpt-4",
+            messages=classification_msgs,
+            max_tokens=5,
+            temperature=0.2
+        )
+        return r.choices[0].message.content.strip().lower() == "yes"
+    except Exception as e:
+        print(f"Error in follow-up detection: {e}")
+        return False  # Default to treating it as a new question
 
 def sanitize_collection_name(file_name: str) -> str:
     """Sanitize file name for Chroma collection."""
@@ -154,44 +187,31 @@ def process_response(user_input):
     """Process the user's query and generate a response with source attribution."""
     if not user_input.strip():
         return
+    
+    # 🔥 Handle AI-Based Follow-Up Questions 🔥
+    if is_follow_up(user_input):
+        last_bot_response = st.session_state.get("last_bot_answer", "")
 
-    if user_input.lower() == "summarise":
-        if not st.session_state["processed_files"]:
-            update_conversation_history("assistant", "No files uploaded.")
-            return
-        fn = st.session_state["selected_file"]
-        if not fn:
-            update_conversation_history("assistant", "No file selected.")
-            return
-        collection_name = sanitize_collection_name(fn)
-        chunks = doc_service.retrieve_relevant_chunks(query=fn, collection_name=collection_name, top_k=100)
-        if not chunks or "Error" in chunks[0]:
-            update_conversation_history("assistant", "Could not retrieve document content for summarization.")
-            return
-        context = "\n\n".join(chunks)
-        msgs = [
-            {"role": "system", "content": (
-                "You are a knowledgeable assistant. Provide a concise, structured summary of the document content provided below. "
-                "Base your summary strictly on the provided context and indicate if the context is insufficient."
-            )},
-            {"role": "user", "content": f"Document: {fn}\n\nContent:\n{context}\n\nSummarize the document in a clear and concise manner."}
-        ]
-        try:
-            r = client.chat.completions.create(model="gpt-4", messages=msgs, max_tokens=1500, temperature=0.3)
-            summary = r.choices[0].message.content.strip()
-            conf = estimate_confidence(summary, context)
-            final_response = (
-                f"**Summary of {fn}:**\n{summary}\n\n"
-                f"**Source:** Extracted from document chunks (Confidence: {conf:.2f}%)\n"
-                f"{'[Note: Low confidence may indicate reliance on general knowledge]' if conf < 70 else ''}"
-            )
-            with st.expander("View Retrieved Chunks"):
-                for i, chunk in enumerate(chunks[:5]):  # Show first 5 chunks for brevity
-                    st.write(f"Chunk {i+1}: {chunk[:200]}...")  # Truncate for display
-            update_conversation_history("assistant", final_response)
-        except Exception as e:
-            update_conversation_history("assistant", f"Error generating summary: {e}")
-        return
+        if last_bot_response:
+            follow_up_msgs = [
+                {"role": "system", "content": "You provide follow-up answers based on the user's previous question and your last response. "
+                                              "Ensure the follow-up answer expands on the previous response in a meaningful way."},
+                {"role": "assistant", "content": last_bot_response},  # Pass last answer
+                {"role": "user", "content": user_input}
+            ]
+            try:
+                r = client.chat.completions.create(
+                    model="gpt-4",
+                    messages=follow_up_msgs,
+                    max_tokens=200,
+                    temperature=0.7
+                )
+                follow_up_response = r.choices[0].message.content.strip()
+                update_conversation_history("assistant", follow_up_response)
+                return  # Avoid treating it as a new question
+            except Exception as e:
+                update_conversation_history("assistant", f"Error in follow-up: {e}")
+                return
 
     # General Q&A or Quiz Logic
     chunks = retrieve_relevant_chunks(user_input)
@@ -248,6 +268,9 @@ def process_response(user_input):
             correct_answer = st.session_state["last_expected_answer"]
             feedback = f"You didn't know the answer. Here is the correct answer:\n\n**{correct_answer}**"
         elif evaluation == "Incorrect":
+            correct_answer = st.session_state["last_expected_answer"]
+            feedback = f"**Evaluation:** {evaluation}\n\nThe correct answer is: {correct_answer}"
+        elif evaluation == "Close":
             correct_answer = st.session_state["last_expected_answer"]
             feedback = f"**Evaluation:** {evaluation}\n\nThe correct answer is: {correct_answer}"
         else:
@@ -377,7 +400,6 @@ if st.session_state["pending_response"]:
         process_response(st.session_state["pending_response"])
     st.session_state["pending_response"] = None
     st.rerun()
-
 
 if st.button("Clear History"):
     reset_session_state()
