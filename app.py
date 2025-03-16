@@ -27,7 +27,7 @@ for key in ["processed_files", "conversation_history", "selected_file", "pending
             else ""  # Placeholder for consistency
         )
 
-MAX_HISTORY = 5
+MAX_HISTORY = 50
 
 def update_conversation_history(role, message):
     """Append new message to conversation history while maintaining a fixed size."""
@@ -155,6 +155,15 @@ def process_response(user_input):
     except Exception as e:
         update_conversation_history("assistant", f"Error: {e}")
 
+def reset_session_state():
+    """Reset session variables that store conversation history and other related data."""
+    keys_to_reset = [
+        "conversation_history", "quiz_mode", "selected_file", 
+        "last_bot_question", "last_expected_answer", "pending_response"
+    ]
+    for key in keys_to_reset:
+        if key in st.session_state:
+            del st.session_state[key]
 # UI Setup
 st.title("🤖 Your Academic Chatbot")
 
@@ -232,3 +241,8 @@ if st.session_state["pending_response"]:
         process_response(st.session_state["pending_response"])
     st.session_state["pending_response"] = None
     st.rerun()
+
+
+if st.button("Clear History"):
+    reset_session_state()
+    st.rerun()  # Re-run the app to refresh the UI
