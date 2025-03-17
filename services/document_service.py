@@ -7,6 +7,8 @@ from langchain_community.embeddings import OpenAIEmbeddings
 import shutil
 
 class DocumentService:
+    
+    # Initializes the document service for processing, chunking, embedding, and retrieval.
     def __init__(
         self,
         client: OpenAI,
@@ -26,7 +28,8 @@ class DocumentService:
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap
         )
-
+        
+    # Returns an instance of Chroma vector store for a given collection.
     def get_vectorstore(self, collection_name: str):
         """Returns a Chroma vector store instance for a specific collection."""
         return Chroma(
@@ -34,7 +37,8 @@ class DocumentService:
             persist_directory=self.persist_directory,
             embedding_function=self.embedding_model
         )
-
+        
+    # Loads and splits a PDF file into text chunks for processing.
     def process_pdf(self, file_path: str):
         """Loads a PDF and splits it into chunks."""
         loader = PyPDFLoader(file_path)
@@ -45,11 +49,13 @@ class DocumentService:
         split_docs = self.splitter.split_documents(documents)
         print(f"Split into {len(split_docs)} chunks")
         return split_docs
-
+    
+    # Splits a raw text document into smaller chunks for embedding
     def process_text(self, text: str):
         """Splits raw text into chunks."""
         return self.splitter.create_documents([text])
-
+    
+    # Adds document chunks to a specified Chroma vector collection.
     def add_documents_to_vectorstore(self, docs, collection_name: str):
         """Adds documents to a specific collection in Chroma."""
         vectorstore = self.get_vectorstore(collection_name)
@@ -58,6 +64,7 @@ class DocumentService:
             print(f"Chunk {i+1}: {doc.page_content[:500]}")
         vectorstore.add_documents(docs)
 
+    # Retrieves the most relevant text chunks from a vector collection based on user query.
     def retrieve_relevant_chunks(self, query: str, collection_name: str, top_k: int = 10):
         """Searches a specific collection for relevant chunks."""
         try:
@@ -66,7 +73,8 @@ class DocumentService:
             return [doc.page_content for doc in results]
         except Exception as e:
             return [f"Error retrieving documents: {e}"]
-            
+    
+    # Deletes a specified collection from the vector store.
     def delete_collection(self, collection_name: str):
         """Deletes a collection from the vector store."""
         try:
@@ -86,7 +94,8 @@ class DocumentService:
         except Exception as e:
             print(f"Error deleting collection: {e}")
             return False
-            
+    
+    # Lists all available collections stored in the vector database.
     def list_collections(self):
         """Lists all available collections in the vector store."""
         try:
