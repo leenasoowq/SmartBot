@@ -8,19 +8,23 @@ import numpy as np
 import re
 import json
 
+# Importing custom service modules
 from services.language_service import LanguageService
 from services.document_service import DocumentService
 
+# Load environment variables (API keys, configurations)
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY)
 
+# Initialize services for language processing and document management
 lang_service = LanguageService(client)
 doc_service = DocumentService(client)
 embedding_model = doc_service.embedding_model
 
 # File to store persistent data
 PROCESSED_FILES_STORAGE = "data/processed_files.json"
+
 # Load processed files from disk if exists
 def load_processed_files():
     if os.path.exists(PROCESSED_FILES_STORAGE):
@@ -41,10 +45,11 @@ def save_processed_files(files):
         st.error(f"Error saving processed files: {e}")
 
 
-# Initialize session state
+# Initialize session state variables for chatbot functionality
 if "processed_files" not in st.session_state:
     st.session_state["processed_files"] = load_processed_files()
 
+# Initialize conversation-related session variables
 for key in ["conversation_history", "quiz_mode", "selected_file", "last_bot_question", "last_expected_answer", "pending_response"]:
     if key not in st.session_state:
         st.session_state[key] = (
@@ -54,9 +59,10 @@ for key in ["conversation_history", "quiz_mode", "selected_file", "last_bot_ques
             else ""  # For last_bot_question
         )
 
-
+# Maximum allowed conversation history length
 MAX_HISTORY = 50
 
+# Function to update conversation history and maintain latest chatbot responses
 def update_conversation_history(role, message):
     """Append new message to conversation history and store last bot response."""
     if role not in ["user", "assistant"]:
@@ -68,10 +74,12 @@ def update_conversation_history(role, message):
     # Store last bot response explicitly for follow-ups
     if role == "assistant":
         st.session_state["last_bot_answer"] = message  # Store last bot answer
-
+        
+    # Trim conversation history to avoid excessive memory usag
     if len(st.session_state["conversation_history"]) > MAX_HISTORY:
         st.session_state["conversation_history"] = st.session_state["conversation_history"][-MAX_HISTORY:]
 
+# Function to retrieve an expected answer based on a document's content
 def get_expected_answer(question: str) -> str:
     """Retrieve document chunks and generate an answer using OpenAI."""
     chunks = retrieve_relevant_chunks(question, top_k=20)
@@ -89,6 +97,7 @@ def get_expected_answer(question: str) -> str:
     except Exception as e:
         return "Error retrieving expected answer."
 
+# Function to evaluate a user's response compared to the expected answer
 def evaluate_user_answer(user_answer: str, expected_answer: str) -> str:
     """Evaluates user response against the expected answer."""
     if user_answer.lower() in ["i don't know", "idk", "not sure"]:
@@ -103,6 +112,7 @@ def evaluate_user_answer(user_answer: str, expected_answer: str) -> str:
     except Exception as e:
         return "Evaluation Error"
 
+# Checks if user input is a follow-up question based on the last chatbot response.
 def is_follow_up(user_input: str) -> bool:
     """Determine if the user input is a follow-up question based on previous context."""
     last_bot_response = st.session_state.get("last_bot_answer", None)
@@ -130,6 +140,7 @@ def is_follow_up(user_input: str) -> bool:
         print(f"Error in follow-up detection: {e}")
         return False  # Default to treating it as a new question
 
+# Sanitizes file names for ChromaDB collection storage.
 def sanitize_collection_name(file_name: str) -> str:
     """Sanitize file name for Chroma collection."""
     base_name = file_name.rsplit(".", 1)[0]
@@ -142,6 +153,7 @@ def sanitize_collection_name(file_name: str) -> str:
         sanitized += "_doc"
     return sanitized
 
+# Processes uploaded files (PDF, DOCX, TXT) and extracts text into collections for retrieval.
 def preprocess_files(files):
     """Upload and parse PDF, DOC/DOCX, TXT files into collections."""
     upload_dir = "uploads"
@@ -152,24 +164,30 @@ def preprocess_files(files):
     if not new_files:
         return "No new files to process."
     
+    # Iterate over uploaded files and process each
     processed_count = 0
     for file in files:
         if file.name not in new_files:
             continue
+        # Save the uploaded file to disk
         file_path = os.path.join(upload_dir, file.name)
         with open(file_path, "wb") as out_file:
             out_file.write(file.getbuffer())
+        # Determine file type
         ext = file.name.lower()
         docs = []
+        # Process PDFs
         if ext.endswith(".pdf"):
             docs = doc_service.process_pdf(file_path)
+        # Process DOCX or DOC files
         elif ext.endswith((".docx", ".doc")):
             try:
                 text = docx2txt.process(file_path)
                 docs = doc_service.process_text(text)
             except Exception as e:
                 st.error(f"Error reading {file.name}: {e}")
-                continue
+                continue   
+        # Process TXT files
         elif ext.endswith(".txt"):
             try:
                 with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -178,9 +196,11 @@ def preprocess_files(files):
             except Exception as e:
                 st.error(f"Error reading {file.name}: {e}")
                 continue
+        # Skip unsupported file types
         else:
             st.warning(f"Unsupported file type: {file.name}")
             continue
+        # If document text was extracted successfully, store it in the vector database
         if docs:
             collection_name = sanitize_collection_name(file.name)
             for d in docs:
@@ -188,13 +208,16 @@ def preprocess_files(files):
             doc_service.add_documents_to_vectorstore(docs, collection_name)
             processed_files.append(file.name)
             processed_count += 1
+        # Remove the temporary file after processing
         os.remove(file_path)
+        
      # Update the session state and save to disk
     st.session_state["processed_files"] = processed_files
     save_processed_files(processed_files)
-    
+    # Return success message based on the number of processed files
     return f"Processed {processed_count} new file(s) successfully!" if processed_count else "No valid text extracted."
 
+# Retrieves the most relevant document chunks from the selected file based on the query.
 def retrieve_relevant_chunks(query: str, top_k: int = 20):
     """Fetch chunks from the selected file’s collection."""
     f = st.session_state["selected_file"]
@@ -207,6 +230,7 @@ def retrieve_relevant_chunks(query: str, top_k: int = 20):
     except Exception as e:
         return [f"Error retrieving chunks: {e}"]
 
+# Estimates the confidence level of the AI-generated response using cosine similarity.
 def estimate_confidence(llm_response: str, context_text: str) -> float:
     """Estimate confidence based on cosine similarity."""
     try:
@@ -217,16 +241,17 @@ def estimate_confidence(llm_response: str, context_text: str) -> float:
     except Exception:
         return 0.0
 
+# Function to process the user's query and generate a response
 def process_response(user_input):
     """Process the user's query and generate a response with source attribution."""
     if not user_input.strip():
         return
     
-    # 🔥 Handle AI-Based Follow-Up Questions 🔥
+    # Check if the user's query is a follow-up question
     if is_follow_up(user_input):
         last_bot_response = st.session_state.get("last_bot_answer", "")
-
         if last_bot_response:
+            # Construct message history to generate a follow-up response
             follow_up_msgs = [
                 {"role": "system", "content": "You provide follow-up answers based on the user's previous question and your last response. "
                                               "Ensure the follow-up answer expands on the previous response in a meaningful way."},
@@ -234,6 +259,7 @@ def process_response(user_input):
                 {"role": "user", "content": user_input}
             ]
             try:
+                # Generate follow-up response
                 r = client.chat.completions.create(
                     model="gpt-4",
                     messages=follow_up_msgs,
@@ -248,6 +274,7 @@ def process_response(user_input):
                 return
 
     # General Q&A or Quiz Logic
+    # Retrieve relevant document chunks to use as context for answering
     chunks = retrieve_relevant_chunks(user_input)
     context_str = "\n\n".join(chunks) if isinstance(chunks, list) else str(chunks)
     if not chunks or "No relevant chunks found" in context_str or "Error" in context_str:
@@ -255,7 +282,8 @@ def process_response(user_input):
         fallback_note = "\n\n**Note:** No relevant document content found; response based on general knowledge."
     else:
         fallback_note = ""
-
+        
+    # Determine if the user is requesting a quiz/test question
     classification_msgs = [
         {"role": "system", "content": "You analyze user requests to determine if they are asking to be tested on a topic."},
         {"role": "user", "content": f"Analyze this request and respond only with 'yes' or 'no': {user_input}"}
@@ -268,7 +296,8 @@ def process_response(user_input):
     except Exception as e:
         update_conversation_history("assistant", f"Error in classification: {e}")
         return
-
+    
+    # If the user is requesting a test question, generate a quiz question
     if is_test_request == "yes":
         file_name = st.session_state.get("selected_file", None)
         if not file_name:
@@ -281,23 +310,29 @@ def process_response(user_input):
             return
         msgs = [
             {"role": "system", "content": (
-                "You generate a single question based on the provided content. "
+                "You generate a single **short-answer** question based on the provided content. "
                 "Ensure the question is relevant, fact-based, and answerable from the document."
+                "Do not ask about metadata such as author names, file details, document structure, or any non-content-related information."
             )},
             {"role": "user", "content": f"Generate exactly one question based on the following content:\n\n{document_text}"}
         ]
         try:
             r = client.chat.completions.create(model="gpt-4", messages=msgs, max_tokens=100, temperature=0.7)
             question = r.choices[0].message.content.strip().split("? ")[0] + "?"
-            update_conversation_history("assistant", f"Here is your test question:\n\n**{question}**\n\nNote: I can only generate one question at a time.")
+            update_conversation_history("assistant", f"Here is your test question:\n\n**{question}**\n\nNote: I can only generate one short-answer question at a time.")
+            
+            # Store the generated question and its expected answer
             st.session_state["last_bot_question"] = question
             st.session_state["last_expected_answer"] = get_expected_answer(question)
         except Exception as e:
             update_conversation_history("assistant", f"Error: {e}")
         return
 
+    # If the user is answering a quiz question, evaluate their response
     if st.session_state["last_bot_question"] and st.session_state["last_expected_answer"]:
         evaluation = evaluate_user_answer(user_input, st.session_state["last_expected_answer"])
+        
+        # Generate appropriate feedback based on evaluation result
         if evaluation == "Don't Know":
             correct_answer = st.session_state["last_expected_answer"]
             feedback = f"You didn't know the answer. Here is the correct answer:\n\n**{correct_answer}**"
@@ -321,27 +356,30 @@ def process_response(user_input):
             "If the context is empty or insufficient, indicate that the answer is based on general knowledge."
         )}
     ]
+    
+    # Append recent conversation history for better context
     for role, message in st.session_state["conversation_history"][-5:]:
         if "Evaluation:" not in message and "Correct Answer:" not in message:
             msgs.append({"role": role, "content": message})
     msgs.append({"role": "user", "content": f"Context:\n{context_str}\n\nQuery: {user_input}"})
     
+    # Attach source attribution note
     try:
         r = client.chat.completions.create(model="gpt-4", messages=msgs, max_tokens=1500, temperature=0.7)
         answer = r.choices[0].message.content.strip()
         conf = estimate_confidence(answer, context_str) if context_str else 0.0
+        
         source_note = (
             f"**Source:** Extracted from document chunks (Confidence: {conf:.2f}%)"
             if context_str else "**Source:** General knowledge (No relevant document content found)"
         )
         final_ans = f"{answer}\n\n{source_note}{fallback_note if not context_str else ''}"
         
-        # Optional: Show retrieved chunks in an expander
+        #Show retrieved chunks in an expander
         if context_str:
             with st.expander("View Retrieved Chunks"):
                 for i, chunk in enumerate(chunks[:5]):  # Limit to 5 for brevity
                     st.write(f"Chunk {i+1}: {chunk[:200]}...")  # Truncate for display
-        
         update_conversation_history("assistant", final_ans)
         if answer.endswith("?"):
             st.session_state["last_bot_question"] = answer
@@ -349,6 +387,7 @@ def process_response(user_input):
     except Exception as e:
         update_conversation_history("assistant", f"Error: {e}")
 
+# Function to clear chatbot session state
 def reset_session_state():
     """Reset session variables that store conversation history and other related data."""
     keys_to_reset = [
@@ -359,7 +398,7 @@ def reset_session_state():
         if key in st.session_state:
             del st.session_state[key]
 
-
+# Function to remove a selected file from the processed files list
 def remove_file():
     """Remove a file from the processed files list."""
     if not st.session_state["selected_file"]:
@@ -384,9 +423,11 @@ def remove_file():
     st.session_state["processed_files"] = processed_files
     save_processed_files(processed_files)
     st.success(f"Removed {file_to_remove} from your documents")
-# UI Setup
+
+# Streamlit UI elements
 st.title("🤖 Your Academic Chatbot")
 
+# Initialize session state variables
 if "uploading" not in st.session_state:
     st.session_state["uploading"] = False
 if "files_to_upload" not in st.session_state:
@@ -394,6 +435,7 @@ if "files_to_upload" not in st.session_state:
 if "uploader_key" not in st.session_state:
     st.session_state["uploader_key"] = 0
 
+# Disable UI interactions when a file is uploading
 if st.session_state["uploading"]:
     st.markdown(
         """
@@ -407,16 +449,20 @@ if st.session_state["uploading"]:
         unsafe_allow_html=True
     )
 
+# Sidebar for file uploads
 with st.sidebar:
     st.subheader("Upload Files")
+    # File uploader for PDF, DOCX, DOC, and TXT files
     uploaded_files = st.file_uploader(
         "Upload PDF, DOC, DOCX, or TXT",
         type=["pdf", "txt", "doc", "docx"],
         accept_multiple_files=True,
         key=f"file_uploader_{st.session_state['uploader_key']}"
     )
+    # Store uploaded files in session state
     if uploaded_files:
         st.session_state["files_to_upload"] = uploaded_files
+    # Process uploaded files when the 'Upload' button is clicked
     if st.session_state["files_to_upload"]:
         if st.button("Upload", disabled=st.session_state["uploading"]):
             st.session_state["uploading"] = True
@@ -427,7 +473,7 @@ with st.sidebar:
             st.session_state["uploading"] = False
             st.session_state["uploader_key"] += 1
             st.rerun()
-
+    # Display list of processed files for selection
     if st.session_state["processed_files"]:
         st.subheader("Available Files")
         st.session_state["selected_file"] = st.selectbox(
@@ -461,6 +507,7 @@ if st.session_state["pending_response"]:
     st.session_state["pending_response"] = None
     st.rerun()
 
+# Button to clear chat history
 if st.button("Clear History"):
     reset_session_state()
     st.rerun()  # Re-run the app to refresh the UI
