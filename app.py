@@ -6,6 +6,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 import docx2txt
 import numpy as np
 import re
+import json
 
 from services.language_service import LanguageService
 from services.document_service import DocumentService
@@ -18,15 +19,41 @@ lang_service = LanguageService(client)
 doc_service = DocumentService(client)
 embedding_model = doc_service.embedding_model
 
+# File to store persistent data
+PROCESSED_FILES_STORAGE = "data/processed_files.json"
+# Load processed files from disk if exists
+def load_processed_files():
+    if os.path.exists(PROCESSED_FILES_STORAGE):
+        try:
+            with open(PROCESSED_FILES_STORAGE, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            st.error(f"Error loading processed files: {e}")
+            return []
+    return []
+
+# Save processed files to disk
+def save_processed_files(files):
+    try:
+        with open(PROCESSED_FILES_STORAGE, 'w') as f:
+            json.dump(files, f)
+    except Exception as e:
+        st.error(f"Error saving processed files: {e}")
+
+
 # Initialize session state
-for key in ["processed_files", "conversation_history", "quiz_mode", "selected_file", "last_bot_question", "last_expected_answer", "pending_response"]:
+if "processed_files" not in st.session_state:
+    st.session_state["processed_files"] = load_processed_files()
+
+for key in ["conversation_history", "quiz_mode", "selected_file", "last_bot_question", "last_expected_answer", "pending_response"]:
     if key not in st.session_state:
         st.session_state[key] = (
-            [] if key in ["processed_files", "conversation_history"] 
+            [] if key in ["conversation_history"] 
             else False if key == "quiz_mode"
             else None if key in ["selected_file", "last_expected_answer", "pending_response"]
             else ""  # For last_bot_question
         )
+
 
 MAX_HISTORY = 50
 
@@ -119,9 +146,12 @@ def preprocess_files(files):
     """Upload and parse PDF, DOC/DOCX, TXT files into collections."""
     upload_dir = "uploads"
     os.makedirs(upload_dir, exist_ok=True)
-    new_files = [f.name for f in files if f.name not in st.session_state["processed_files"]]
+    processed_files = st.session_state["processed_files"]
+    new_files = [f.name for f in files if f.name not in processed_files]
+
     if not new_files:
         return "No new files to process."
+    
     processed_count = 0
     for file in files:
         if file.name not in new_files:
@@ -156,9 +186,13 @@ def preprocess_files(files):
             for d in docs:
                 d.metadata["file_name"] = file.name
             doc_service.add_documents_to_vectorstore(docs, collection_name)
-            st.session_state["processed_files"].append(file.name)
+            processed_files.append(file.name)
             processed_count += 1
         os.remove(file_path)
+     # Update the session state and save to disk
+    st.session_state["processed_files"] = processed_files
+    save_processed_files(processed_files)
+    
     return f"Processed {processed_count} new file(s) successfully!" if processed_count else "No valid text extracted."
 
 def retrieve_relevant_chunks(query: str, top_k: int = 20):
@@ -324,6 +358,32 @@ def reset_session_state():
     for key in keys_to_reset:
         if key in st.session_state:
             del st.session_state[key]
+
+
+def remove_file():
+    """Remove a file from the processed files list."""
+    if not st.session_state["selected_file"]:
+        return
+    
+    file_to_remove = st.session_state["selected_file"]
+    
+    # Try to remove the collection from Chroma
+    try:
+        collection_name = sanitize_collection_name(file_to_remove)
+        doc_service.delete_collection(collection_name)
+    except Exception as e:
+        st.error(f"Error removing collection: {e}")
+    
+    # Update processed files
+    processed_files = st.session_state["processed_files"]
+    if file_to_remove in processed_files:
+        processed_files.remove(file_to_remove)
+        st.session_state["selected_file"] = None
+        
+    # Save updated list to disk
+    st.session_state["processed_files"] = processed_files
+    save_processed_files(processed_files)
+    st.success(f"Removed {file_to_remove} from your documents")
 # UI Setup
 st.title("🤖 Your Academic Chatbot")
 

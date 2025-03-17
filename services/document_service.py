@@ -4,6 +4,7 @@ from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import OpenAIEmbeddings
+import shutil
 
 class DocumentService:
     def __init__(
@@ -17,6 +18,10 @@ class DocumentService:
         self.client = client
         self.embedding_model = OpenAIEmbeddings(model=embedding_model_name)
         self.persist_directory = persist_directory
+        
+        # Create the persist directory if it doesn't exist
+        os.makedirs(self.persist_directory, exist_ok=True)
+        
         self.splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap
@@ -61,3 +66,36 @@ class DocumentService:
             return [doc.page_content for doc in results]
         except Exception as e:
             return [f"Error retrieving documents: {e}"]
+            
+    def delete_collection(self, collection_name: str):
+        """Deletes a collection from the vector store."""
+        try:
+            # Get the path to the collection directory
+            collection_path = os.path.join(self.persist_directory, collection_name)
+            
+            # Delete the collection if it exists
+            if os.path.exists(collection_path):
+                shutil.rmtree(collection_path)
+                print(f"Collection '{collection_name}' deleted successfully")
+                return True
+                
+            # Try to delete using Chroma's API as well
+            vectorstore = self.get_vectorstore(collection_name)
+            vectorstore.delete_collection()
+            return True
+        except Exception as e:
+            print(f"Error deleting collection: {e}")
+            return False
+            
+    def list_collections(self):
+        """Lists all available collections in the vector store."""
+        try:
+            # Get all subdirectories in the persist directory
+            collections = []
+            for item in os.listdir(self.persist_directory):
+                if os.path.isdir(os.path.join(self.persist_directory, item)):
+                    collections.append(item)
+            return collections
+        except Exception as e:
+            print(f"Error listing collections: {e}")
+            return []
