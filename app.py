@@ -481,6 +481,11 @@ with st.sidebar:
             st.session_state["processed_files"],
             disabled=st.session_state["uploading"]
         )
+        # Add a button to remove the selected file
+        if st.session_state.get("selected_file"):
+            if st.button("Remove Selected File"):
+                remove_file()
+                st.rerun()  # Refresh UI after removal
 
 if st.session_state["uploading"]:
     st.stop()
