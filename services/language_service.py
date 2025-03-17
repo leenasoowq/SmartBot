@@ -6,13 +6,14 @@ class LanguageService:
     """
     Performs language detection and translation to English using OpenAI GPT.
     """
-
+    # Initializes the language service with an OpenAI client for language detection and translation.
     def __init__(self, client: OpenAI):
         """
         :param client: An instance of openai.OpenAI for making GPT calls.
         """
         self.client = client
-
+        
+    # Detects the language of the given text using OpenAI's GPT model.
     def detect_language(self, text: str) -> str:
         """
         Detects the language of 'text' using GPT.
@@ -41,7 +42,8 @@ class LanguageService:
             return response.choices[0].message.content.strip()
         except Exception as e:
             return f"Error detecting language: {e}"
-
+        
+    # Translates the given text into English, with optional source language reference.
     def translate_text(self, text: str, source_language: str = "Unknown") -> str:
         """
         Translates the given text into English, optionally referencing the source language.
