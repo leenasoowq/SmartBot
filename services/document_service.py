@@ -41,12 +41,12 @@ class DocumentService:
             embedding_function=self.embedding_model
         )
 
-    def encode_Image(image_path):
+    def encode_Image(self, image_path):
         with open(image_path, "rb") as image_file:
             return base64.b64encode(image_file.read()).decode("utf-8")
 
-    def process_image(image_path, prompt="Describe this image"):
-        encoded_image = encode_Image(image_path)
+    def process_image(self, image_path, prompt="Describe this image"):
+        encoded_image = self.encode_Image(image_path)
         response = openai.chat.completions.create(
             model="gpt-4o",
             messages=[
