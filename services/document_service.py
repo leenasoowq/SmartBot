@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import fitz  # PyMuPDF
@@ -63,83 +64,6 @@ class DocumentService:
         )
         return response.choices[0].message.content
 
-    # def process_pdf(self, file_path: str, collection_name: str = "default_collection"):
-    #     """Processes a PDF file, extracting text and images, and sending images to OpenAI for descriptions."""
-        
-    #     # Create an images directory
-    #     path = "./images"
-    #     os.makedirs(path, exist_ok=True)
-
-    #     # Open the PDF
-    #     doc = fitz.open(file_path)
-    #     all_docs = []  # Holds extracted data (text + image descriptions)
-
-    #     for page_num in range(len(doc)):
-    #         page = doc[page_num]
-            
-    #         # Extract text from the page
-    #         text_content = page.get_text("text").strip()
-    #         if text_content:
-    #             text_doc = Document(
-    #                 page_content=f"Page {page_num + 1}: {text_content}",
-    #                 metadata={"page_number": page_num + 1}
-    #             )
-    #             all_docs.append(text_doc)
-
-    #         # Extract and process images
-    #         for img_index, img in enumerate(page.get_images(full=True)):
-    #             xref = img[0]
-    #             base_image = doc.extract_image(xref)
-    #             image_bytes = base_image["image"]
-    #             image_ext = base_image["ext"]
-    #             image_filename = os.path.join(path, f"page{page_num + 1}_img{img_index + 1}.{image_ext}")
-
-    #             # Save image locally
-    #             with open(image_filename, "wb") as img_file:
-    #                 img_file.write(image_bytes)
-
-    #             # Encode image to Base64
-    #             encoded_image = base64.b64encode(image_bytes).decode("utf-8")
-    #             chain_gpt= ChatOpenAI(model="gpt-4o")
-    #             # Send image to OpenAI for description
-    #             prompt = [
-    #                 SystemMessage(content="You are a bot that is good at analyzing images."),
-    #                 HumanMessage(content="Describe the contents of this image."),  # ✅ Text message
-    #                 HumanMessage(content=[  # ✅ Wrap in a list
-    #                     {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded_image}"}}
-    #             ])]
-    #             response = chain_gpt.invoke(prompt)
-    #             print("OpenAI Response:", response)
-
-    #             # image_description = response.choices[0].message.content
-    #             image_description = response.content if hasattr(response, "content") else "No description available"
-
-    #             # Store image description as a document
-    #             image_doc = Document(
-    #                 page_content=f"Page {page_num + 1} Image {img_index + 1}: {image_description}",
-    #                 metadata={
-    #                     "image_path": image_filename,
-    #                     "summary": image_description,
-    #                     "page_number": page_num + 1
-    #                 }
-    #             )
-    #             all_docs.append(image_doc)
-            
-    #     # Split documents and retain metadata
-    #     split_docs = []
-    #     for doc in all_docs:
-    #         split_text = self.splitter.split_text(doc.page_content)
-    #         for chunk in split_text:
-    #             chunk_with_metadata = Document(
-    #                 page_content=chunk,
-    #                 metadata=doc.metadata  # Keep original metadata
-    #             )
-    #             split_docs.append(chunk_with_metadata)
-        
-    #     # Add split documents with metadata to the vector store
-    #     self.add_documents_to_vectorstore(split_docs, collection_name)
-        
-    #     return split_docs
     def process_pdf(self, file_path: str, collection_name: str = "default_collection"):
         """Processes a PDF file, extracting text and images, and sending images to OpenAI for descriptions."""
         
@@ -241,6 +165,12 @@ class DocumentService:
         results = vectorstore.similarity_search(query, k=25) 
         print(f"results {results} \n")
         print(f"Retrieved {len(results)} results from vector store.")
+
+         # ✅ Print all available metadata for debugging
+        if results:
+            print("📌 **Available Metadata from Vector Store:**")
+            for idx, result in enumerate(results):
+                print(f"📝 **Result {idx + 1} Metadata:** {json.dumps(result.metadata, indent=4)}")
 
         # ✅ Filter results to keep only relevant image documents
         filtered_results = [

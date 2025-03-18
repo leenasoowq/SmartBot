@@ -8,6 +8,7 @@ import docx2txt
 import numpy as np
 import re
 import json
+import shutil
 
 
 from services.language_service import LanguageService
@@ -144,58 +145,6 @@ def sanitize_collection_name(file_name: str) -> str:
         sanitized += "_doc"
     return sanitized
 
-# def preprocess_files(files):
-#     """Upload and parse PDF, DOC/DOCX, TXT files into collections."""
-#     upload_dir = "uploads"
-#     os.makedirs(upload_dir, exist_ok=True)
-#     processed_files = st.session_state["processed_files"]
-#     new_files = [f.name for f in files if f.name not in processed_files]
-
-#     if not new_files:
-#         return "No new files to process."
-    
-#     processed_count = 0
-#     for file in files:
-#         if file.name not in new_files:
-#             continue
-#         file_path = os.path.join(upload_dir, file.name)
-#         with open(file_path, "wb") as out_file:
-#             out_file.write(file.getbuffer())
-#         ext = file.name.lower()
-#         docs = []
-#         if ext.endswith(".pdf"):
-#             docs = doc_service.process_pdf(file_path)
-#         elif ext.endswith((".docx", ".doc")):
-#             try:
-#                 text = docx2txt.process(file_path)
-#                 docs = doc_service.process_text(text)
-#             except Exception as e:
-#                 st.error(f"Error reading {file.name}: {e}")
-#                 continue
-#         elif ext.endswith(".txt"):
-#             try:
-#                 with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-#                     text = f.read()
-#                 docs = doc_service.process_text(text)
-#             except Exception as e:
-#                 st.error(f"Error reading {file.name}: {e}")
-#                 continue
-#         else:
-#             st.warning(f"Unsupported file type: {file.name}")
-#             continue
-#         if docs:
-#             collection_name = sanitize_collection_name(file.name)
-#             for d in docs:
-#                 d.metadata["file_name"] = file.name
-#             doc_service.add_documents_to_vectorstore(docs, collection_name)
-#             processed_files.append(file.name)
-#             processed_count += 1
-#         os.remove(file_path)
-#      # Update the session state and save to disk
-#     st.session_state["processed_files"] = processed_files
-#     save_processed_files(processed_files)
-    
-#     return f"Processed {processed_count} new file(s) successfully!" if processed_count else "No valid text extracted."
 
 def preprocess_files(files):
     """Upload and parse PDF, DOC/DOCX, TXT files into collections."""
@@ -298,181 +247,149 @@ def extract_page_number(query):
     return None
 
 
+
 def process_response(user_input):
     """Process the user's query and generate a response with source attribution."""
     if not user_input.strip():
         return
-     # 🔍 Detect if query is an image request
-    image_query_match = re.search(r"image at page (\d+)", user_input.lower())
-    if image_query_match:
-        page_num = int(image_query_match.group(1))  # Extract page number
-        image_data = doc_service.retrieve_image_summary(page_num)  # Query vector store
+    
+    if detect_image_request(user_input):
+        return handle_image_request(user_input)
+    
+    if detect_summary_request(user_input):
+        return handle_summary_request()
+    
+    if detect_quiz_request(user_input):
+        return handle_quiz_request()
+    
+    if is_quiz_answering():
+        return handle_quiz_answering(user_input)
+    
+    return handle_general_query(user_input)
+
+def detect_image_request(user_input):
+    return bool(re.search(r"image at page (\d+)", user_input.lower()))
+
+def detect_summary_request(user_input):
+    return "summarize" in user_input.lower() or "give a summary" in user_input.lower()
+
+def detect_quiz_request(user_input):
+    return "quiz" in user_input.lower() or "test me" in user_input.lower()
+
+def is_quiz_answering():
+    return bool(st.session_state.get("last_bot_question")) and bool(st.session_state.get("last_expected_answer"))
+
+def handle_image_request(user_input):
+    page_num = int(re.search(r"image at page (\d+)", user_input.lower()).group(1))
+    image_data = doc_service.retrieve_image_summary(page_num)
+    
+    if image_data:
+        response_text = f"**📷 Image Explanation (Page {image_data['page_number']})**\n\n📌 **Summary:** {image_data['summary']}\n\n🖼️ *(Stored Image Path: {image_data['image_path']})*"
+    else:
+        response_text = f"⚠️ No image metadata found for Page {page_num}."
+    
+    update_conversation_history("assistant", response_text)
+
+def handle_summary_request():
+    file_name = st.session_state.get("selected_file")
+    
+    if not file_name:
+        update_conversation_history("assistant", "⚠️ No document is selected. Please upload or select a file first.")
+        return
+    
+    # Retrieve content
+    chunks = retrieve_relevant_chunks(file_name)
+    
+    # Debug: Log chunk contents
+    if not chunks:
+        update_conversation_history("assistant", "⚠️ Could not extract content from the document.")
+        print("Debug: No content extracted from document.")
+        return
+    
+    document_text = "\n\n".join(chunks)
+    
+    # Debug: Log document text length
+    print(f"Debug: Extracted document text length - {len(document_text)} characters")
+
+    if len(document_text.strip()) < 100:
+        update_conversation_history("assistant", "⚠️ Document content is too short for summarization.")
+        print("Debug: Extracted text is too short.")
+        return
+    
+    try:
+        r = client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "You summarize the provided text concisely."},
+                {"role": "user", "content": f"Summarize the following document:\n\n{document_text}"}
+            ],
+            max_tokens=150,
+            temperature=0.3
+        )
         
-        if image_data:
-            page_number = image_data["page_number"]
-            image_summary = image_data["summary"]
-            image_path = image_data["image_path"]
-
-            response_text = f"**📷 Image Explanation (Page {page_number})**\n\n📌 **Summary:** {image_summary}\n\n🖼️ *(Stored Image Path: {image_path})*"
-            update_conversation_history("assistant", response_text)
-
-        else:
-            update_conversation_history("assistant", f"⚠️ No image metadata found for Page {page_num}.")
+        summary = r.choices[0].message.content.strip()
         
-        return  # Stop further processing
+        # Debug: Log summary output
+        print(f"Debug: Generated summary - {summary}")
 
-    # Retrieve text-based content
-    chunks = retrieve_relevant_chunks(user_input)
-    context_str = "\n\n".join(chunks) if chunks else ""
-    fallback_note = "\n\n**Note:** No relevant document content found; response based on general knowledge." if not chunks else ""
+        update_conversation_history("assistant", f"📌 **Summary:**\n\n{summary}")
+    except Exception as e:
+        update_conversation_history("assistant", f"Error generating summary: {e}")
+        print(f"Debug: Error in summary generation - {e}")
 
-    # 📝 Text-based Q&A processing
+def handle_quiz_request():
+    file_name = st.session_state.get("selected_file")
+    if not file_name:
+        return update_conversation_history("assistant", "⚠️ No document selected. Upload or select a file first.")
+    
+    chunks = retrieve_relevant_chunks(file_name)
+    if not chunks:
+        return update_conversation_history("assistant", "⚠️ Could not extract content from the document.")
+    
+    document_text = "\n\n".join(chunks)
+    if len(document_text.strip()) < 100:
+        return update_conversation_history("assistant", "⚠️ Document content is too short for quiz generation.")
+    
+    try:
+        r = client.chat.completions.create(model="gpt-4", messages=[
+            {"role": "system", "content": "You generate a **single** question based on the provided content."},
+            {"role": "user", "content": f"Generate exactly one question based on the following document:\n\n{document_text}"}
+        ], max_tokens=100, temperature=0.3)
+        
+        question = r.choices[0].message.content.strip().split("? ")[0] + "?"
+        update_conversation_history("assistant", f"📝 **Quiz Question:**\n\n**{question}**")
+        st.session_state["last_bot_question"] = question
+        st.session_state["last_expected_answer"] = get_expected_answer(question)
+    except Exception as e:
+        update_conversation_history("assistant", f"Error generating quiz question: {e}")
+
+def handle_quiz_answering(user_input):
+    evaluation = evaluate_user_answer(user_input, st.session_state["last_expected_answer"])
+    correct_answer = st.session_state["last_expected_answer"]
+    
+    feedback = f"✅ **Evaluation:** {evaluation}\n\n📌 Correct Answer: {correct_answer}" if evaluation != "Don't Know" else f"⚠️ You didn't know the answer. Here is the correct answer:\n\n**{correct_answer}**"
+    
+    update_conversation_history("assistant", feedback)
+    st.session_state["last_bot_question"] = ""
+    st.session_state["last_expected_answer"] = ""
+
+def handle_general_query(user_input):
+    context_str = ""  # Load relevant context if available
     msgs = [
         {"role": "system", "content": "You answer queries using the provided context. If no context is found, use general knowledge."},
         {"role": "user", "content": f"Context:\n{context_str}\n\nQuery: {user_input}"}
     ]
-
-    try:
-        r = client.chat.completions.create(
-            model="gpt-4",
-            messages=msgs,
-            max_tokens=1500,
-            temperature=0.7
-        )
-        answer = r.choices[0].message.content.strip()
-        source_note = "**Source:** Extracted from document chunks" if context_str else "**Source:** General Knowledge"
-
-        final_ans = f"{answer}\n\n{source_note}{fallback_note}"
-        update_conversation_history("assistant", final_ans)
-
-    except Exception as e:
-        update_conversation_history("assistant", f"Error: {e}")
-    # 🔥 Handle AI-Based Follow-Up Questions 🔥
-    if is_follow_up(user_input):
-        last_bot_response = st.session_state.get("last_bot_answer", "")
-
-        if last_bot_response:
-            follow_up_msgs = [
-                {"role": "system", "content": "You provide follow-up answers based on the user's previous question and your last response. "
-                                              "Ensure the follow-up answer expands on the previous response in a meaningful way."},
-                {"role": "assistant", "content": last_bot_response},  # Pass last answer
-                {"role": "user", "content": user_input}
-            ]
-            try:
-                r = client.chat.completions.create(
-                    model="gpt-4",
-                    messages=follow_up_msgs,
-                    max_tokens=200,
-                    temperature=0.7
-                )
-                follow_up_response = r.choices[0].message.content.strip()
-                update_conversation_history("assistant", follow_up_response)
-                return  # Avoid treating it as a new question
-            except Exception as e:
-                update_conversation_history("assistant", f"Error in follow-up: {e}")
-                return
-
-    # General Q&A or Quiz Logic
-    chunks = retrieve_relevant_chunks(user_input)
-    context_str = "\n\n".join(chunks) if isinstance(chunks, list) else str(chunks)
-    if not chunks or "No relevant chunks found" in context_str or "Error" in context_str:
-        context_str = ""
-        fallback_note = "\n\n**Note:** No relevant document content found; response based on general knowledge."
-    else:
-        fallback_note = ""
-
-    classification_msgs = [
-        {"role": "system", "content": "You analyze user requests to determine if they are asking to be tested on a topic."},
-        {"role": "user", "content": f"Analyze this request and respond only with 'yes' or 'no': {user_input}"}
-    ]
-    try:
-        classification_response = client.chat.completions.create(
-            model="gpt-4", messages=classification_msgs, max_tokens=10, temperature=0.2
-        )
-        is_test_request = classification_response.choices[0].message.content.strip().lower()
-    except Exception as e:
-        update_conversation_history("assistant", f"Error in classification: {e}")
-        return
-
-    if is_test_request == "yes":
-        file_name = st.session_state.get("selected_file", None)
-        if not file_name:
-            update_conversation_history("assistant", "No document is currently selected. Please upload or select a file first.")
-            return
-        chunks = retrieve_relevant_chunks(file_name)
-        document_text = "\n\n".join(chunks) if isinstance(chunks, list) else str(chunks)
-        if not document_text.strip():
-            update_conversation_history("assistant", "Could not extract relevant content from the document.")
-            return
-        msgs = [
-            {"role": "system", "content": (
-                "You generate a single question based on the provided content. "
-                "Ensure the question is relevant, fact-based, and answerable from the document."
-            )},
-            {"role": "user", "content": f"Generate exactly one question based on the following content:\n\n{document_text}"}
-        ]
-        try:
-            r = client.chat.completions.create(model="gpt-4", messages=msgs, max_tokens=100, temperature=0.7)
-            question = r.choices[0].message.content.strip().split("? ")[0] + "?"
-            update_conversation_history("assistant", f"Here is your test question:\n\n**{question}**\n\nNote: I can only generate one question at a time.")
-            st.session_state["last_bot_question"] = question
-            st.session_state["last_expected_answer"] = get_expected_answer(question)
-        except Exception as e:
-            update_conversation_history("assistant", f"Error: {e}")
-        return
-
-    if st.session_state["last_bot_question"] and st.session_state["last_expected_answer"]:
-        evaluation = evaluate_user_answer(user_input, st.session_state["last_expected_answer"])
-        if evaluation == "Don't Know":
-            correct_answer = st.session_state["last_expected_answer"]
-            feedback = f"You didn't know the answer. Here is the correct answer:\n\n**{correct_answer}**"
-        elif evaluation == "Incorrect":
-            correct_answer = st.session_state["last_expected_answer"]
-            feedback = f"**Evaluation:** {evaluation}\n\nThe correct answer is: {correct_answer}"
-        elif evaluation == "Close":
-            correct_answer = st.session_state["last_expected_answer"]
-            feedback = f"**Evaluation:** {evaluation}\n\nThe correct answer is: {correct_answer}"
-        else:
-            feedback = f"**Evaluation:** {evaluation}"
-        update_conversation_history("assistant", feedback)
-        st.session_state["last_bot_question"] = ""
-        st.session_state["last_expected_answer"] = ""
-        return
-
-    # General Q&A
-    msgs = [
-        {"role": "system", "content": (
-            "You are a knowledgeable assistant. Use only the provided context to answer the query. "
-            "If the context is empty or insufficient, indicate that the answer is based on general knowledge."
-        )}
-    ]
-    for role, message in st.session_state["conversation_history"][-5:]:
-        if "Evaluation:" not in message and "Correct Answer:" not in message:
-            msgs.append({"role": role, "content": message})
-    msgs.append({"role": "user", "content": f"Context:\n{context_str}\n\nQuery: {user_input}"})
     
     try:
-        r = client.chat.completions.create(model="gpt-4", messages=msgs, max_tokens=1500, temperature=0.7)
+        r = client.chat.completions.create(model="gpt-4", messages=msgs, max_tokens=1500, temperature=0.2)
         answer = r.choices[0].message.content.strip()
-        conf = estimate_confidence(answer, context_str) if context_str else 0.0
-        source_note = (
-            f"**Source:** Extracted from document chunks (Confidence: {conf:.2f}%)"
-            if context_str else "**Source:** General knowledge (No relevant document content found)"
-        )
-        final_ans = f"{answer}\n\n{source_note}{fallback_note if not context_str else ''}"
-        
-        # Optional: Show retrieved chunks in an expander
-        if context_str:
-            with st.expander("View Retrieved Chunks"):
-                for i, chunk in enumerate(chunks[:5]):  # Limit to 5 for brevity
-                    st.write(f"Chunk {i+1}: {chunk[:200]}...")  # Truncate for display
-        
-        update_conversation_history("assistant", final_ans)
-        if answer.endswith("?"):
-            st.session_state["last_bot_question"] = answer
-            st.session_state["last_expected_answer"] = get_expected_answer(answer)
+        source_note = "**Source:** Extracted from document chunks" if context_str else "**Source:** General Knowledge"
+        update_conversation_history("assistant", f"{answer}\n\n{source_note}")
     except Exception as e:
         update_conversation_history("assistant", f"Error: {e}")
+
+
+
 
 def reset_session_state():
     """Reset session variables that store conversation history and other related data."""
@@ -484,147 +401,38 @@ def reset_session_state():
         if key in st.session_state:
             del st.session_state[key]
 
+def clear_selected_file():
+    """Clear metadata, images, and stored data of the selected file."""
+    if not st.session_state["selected_file"]:
+        st.warning("No file selected to clear.")
+        return
 
-# def process_response(user_input):
-#     """Process the user's query and generate a response with source attribution."""
-#     if not user_input.strip():
-#         return
-    
-#     # Handle image-based queries (e.g., "explain page 4 image")
-#     if "image" in user_input.lower() and "page" in user_input.lower():
-#         page_num = extract_page_number(user_input)  # Extract the page number from user input
+    file_to_clear = st.session_state["selected_file"]
 
-#         if not page_num:
-#             st.chat_message("assistant").markdown("❌ Error: Unable to extract page number from your query.")
-#             return
-        
-#         # ✅ Retrieve ONLY image path and summary for the specified page
-#         image_data = retrieve_image_summary_for_page(page_num)
+    # Remove from processed files list
+    if file_to_clear in st.session_state["processed_files"]:
+        st.session_state["processed_files"].remove(file_to_clear)
 
-#         if not image_data:
-#             st.chat_message("assistant").markdown(f"⚠️ No image data found for Page {page_num}.")
-#             return
+    # Delete associated metadata file
+    metadata_file = os.path.join("data", f"{file_to_clear}.json")
+    if os.path.exists(metadata_file):
+        os.remove(metadata_file)
 
-#         # ✅ Extract only required fields
-#         image_path = image_data.get("image_path", None)
-#         image_summary = image_data.get("summary", "No summary available.")
+    # Delete images folder associated with the file
+    image_folder = os.path.join("images", file_to_clear)
+    if os.path.exists(image_folder):
+        shutil.rmtree(image_folder)
 
-#         # ✅ If the image file is missing, only show the summary
-#         if not image_path or not os.path.exists(image_path):
-#             st.chat_message("assistant").markdown(f"**📝 Summary:** {image_summary}")
-#             print(f"⚠️ Missing file: {image_path}")  # Log the missing file issue
-#             return  # ✅ Stop here, do NOT add missing image to session history
+    # Delete data folder associated with the file
+    data_folder = os.path.join("data", file_to_clear)
+    if os.path.exists(data_folder):
+        shutil.rmtree(data_folder)
 
-#         # ✅ Convert to absolute path for Streamlit compatibility
-#         abs_image_path = os.path.abspath(image_path).replace("\\", "/")
+    # Update the session state and save to disk
+    st.session_state["selected_file"] = None
+    save_processed_files(st.session_state["processed_files"])
 
-#         # ✅ Maintain session state to persist images
-#         if "image_history" not in st.session_state:
-#             st.session_state["image_history"] = []
-
-#         # ✅ Avoid duplicate entries in session history
-#         if (abs_image_path, f"Image from Page {page_num}") not in st.session_state["image_history"]:
-#             st.session_state["image_history"].append((abs_image_path, f"Image from Page {page_num}"))
-
-#         # ✅ Display the stored images
-#         for img_path, caption in st.session_state["image_history"]:
-#             st.image(img_path, caption=caption, use_container_width=True)  # ✅ Fixed deprecated parameter
-
-#         # ✅ Show summary below the image
-#         st.chat_message("assistant").markdown(f"**📝 Summary:** {image_summary}")
-#         return
-
-#     # 🔥 Handle AI-Based Follow-Up Questions 🔥
-#     if is_follow_up(user_input):
-#         last_bot_response = st.session_state.get("last_bot_answer", "")
-        
-#         if last_bot_response:
-#             follow_up_msgs = [
-#                 {"role": "system", "content": "You provide follow-up answers based on the user's previous question and your last response. "
-#                                               "Ensure the follow-up answer expands on the previous response in a meaningful way."},
-#                 {"role": "assistant", "content": last_bot_response},  # Pass last answer
-#                 {"role": "user", "content": user_input}
-#             ]
-#             try:
-#                 r = client.chat.completions.create(
-#                     model="gpt-4",
-#                     messages=follow_up_msgs,
-#                     max_tokens=200,
-#                     temperature=0.7
-#                 )
-#                 follow_up_response = r.choices[0].message.content.strip()
-#                 update_conversation_history("assistant", follow_up_response)
-#                 return  # Avoid treating it as a new question
-#             except Exception as e:
-#                 update_conversation_history("assistant", f"❌ Error in follow-up: {e}")
-#                 return
-
-#     # General Q&A or Quiz Logic
-#     chunks = retrieve_relevant_chunks(user_input)
-#     context_str = "\n\n".join(chunks) if isinstance(chunks, list) else str(chunks)
-#     if not chunks or "No relevant chunks found" in context_str or "Error" in context_str:
-#         context_str = ""
-#         fallback_note = "\n\n**Note:** No relevant document content found; response based on general knowledge."
-#     else:
-#         fallback_note = ""
-
-#     if context_str:
-#         classification_msgs = [
-#             {"role": "system", "content": "You analyze user requests to determine if they are asking to be tested on a topic."},
-#             {"role": "user", "content": f"Analyze this request and respond only with 'yes' or 'no': {user_input}"}
-#         ]
-#         try:
-#             classification_response = client.chat.completions.create(
-#                 model="gpt-4", messages=classification_msgs, max_tokens=10, temperature=0.2
-#             )
-#             is_test_request = classification_response.choices[0].message.content.strip().lower()
-#         except Exception as e:
-#             update_conversation_history("assistant", f"❌ Error in classification: {e}")
-#             return
-
-#         if is_test_request == "yes":
-#             file_name = st.session_state.get("selected_file", None)
-#             if not file_name:
-#                 update_conversation_history("assistant", "⚠️ No document is currently selected. Please upload or select a file first.")
-#                 return
-#             chunks = retrieve_relevant_chunks(file_name)
-#             document_text = "\n\n".join(chunks) if isinstance(chunks, list) else str(chunks)
-#             if not document_text.strip():
-#                 update_conversation_history("assistant", "⚠️ Could not extract relevant content from the document.")
-#                 return
-#             msgs = [
-#                 {"role": "system", "content": (
-#                     "You generate a single question based on the provided content. "
-#                     "Ensure the question is relevant, fact-based, and answerable from the document."
-#                 )},
-            
-#             ]
-#             for role, message in st.session_state["conversation_history"][-5:]:
-#                 if "Evaluation:" not in message and "Correct Answer:" not in message:
-#                     msgs.append({"role": role, "content": message})
-#             msgs.append({"role": "user", "content": f"Context:\n{context_str}\n\nQuery: {user_input}"})
-            
-#             try:
-#                 r = client.chat.completions.create(model="gpt-4", messages=msgs, max_tokens=1500, temperature=0.7)
-#                 answer = r.choices[0].message.content.strip()
-#                 conf = estimate_confidence(answer, context_str) if context_str else 0.0
-#                 source_note = (
-#                     f"**Source:** Extracted from document chunks (Confidence: {conf:.2f}%)"
-#                     if context_str else "**Source:** General knowledge (No relevant document content found)"
-#                 )
-#                 final_ans = f"{answer}\n\n{source_note}{fallback_note if not context_str else ''}"
-                
-#                 if context_str:
-#                     with st.expander("View Retrieved Chunks"):
-#                         for i, chunk in enumerate(chunks[:5]):  # Limit to 5 for brevity
-#                             st.write(f"Chunk {i+1}: {chunk[:200]}...")  # Truncate for display
-                
-#                 update_conversation_history("assistant", final_ans)
-#                 if answer.endswith("?"):
-#                     st.session_state["last_bot_question"] = answer
-#                     st.session_state["last_expected_answer"] = get_expected_answer(answer)
-#             except Exception as e:
-#                 update_conversation_history("assistant", f"❌ Error: {e}")
+    st.success(f"Cleared all data related to {file_to_clear}.")
 
 
 def reset_session_state():
@@ -637,31 +445,82 @@ def reset_session_state():
         if key in st.session_state:
             del st.session_state[key]
 
-
-def remove_file():
-    """Remove a file from the processed files list."""
-    if not st.session_state["selected_file"]:
+def clear_selected_file():
+    """Fully remove a selected file's metadata, images, vector data, and ChromaDB stored files."""
+    if not st.session_state.get("selected_file"):
+        st.warning("No file selected to clear.")
         return
-    
-    file_to_remove = st.session_state["selected_file"]
-    
-    # Try to remove the collection from Chroma
+
+    file_to_clear = st.session_state["selected_file"]
+    collection_name = sanitize_collection_name(file_to_clear)
+    image_collection_name = f"{collection_name}_images"
+
+    # ✅ Remove from processed files list
+    if file_to_clear in st.session_state["processed_files"]:
+        st.session_state["processed_files"].remove(file_to_clear)
+
+    # ✅ Delete metadata file (stored JSON file)
+    metadata_file = os.path.join("data", f"{file_to_clear}.json")
+    if os.path.exists(metadata_file):
+        os.remove(metadata_file)
+
+    # ✅ Delete stored images
+    image_folder = os.path.join("images", file_to_clear)
+    if os.path.exists(image_folder):
+        shutil.rmtree(image_folder)
+
+    # ✅ Delete stored data (text/vector data)
+    data_folder = os.path.join("data", file_to_clear)
+    if os.path.exists(data_folder):
+        shutil.rmtree(data_folder)
+
+    # ✅ Delete ChromaDB stored data (Persistent Mode)
+    chromadb_folder = "chroma_db"  # Change this to the actual ChromaDB storage path
+    if os.path.exists(chromadb_folder):
+        try:
+            shutil.rmtree(chromadb_folder)
+            print(f"✅ Successfully deleted ChromaDB folder: {chromadb_folder}")
+        except Exception as e:
+            print(f"⚠️ Error deleting ChromaDB folder: {e}")
+
+    # ✅ Ensure all data is removed from the vector database
     try:
-        collection_name = sanitize_collection_name(file_to_remove)
-        doc_service.delete_collection(collection_name)
-    except Exception as e:
-        st.error(f"Error removing collection: {e}")
-    
-    # Update processed files
-    processed_files = st.session_state["processed_files"]
-    if file_to_remove in processed_files:
-        processed_files.remove(file_to_remove)
-        st.session_state["selected_file"] = None
+        # Step 1: Check existing data before deletion
+        existing_data = doc_service.get_all_entries(collection_name)
+        existing_images = doc_service.get_all_entries(image_collection_name)
         
-    # Save updated list to disk
-    st.session_state["processed_files"] = processed_files
-    save_processed_files(processed_files)
-    st.success(f"Removed {file_to_remove} from your documents")
+        if existing_data:
+            print(f"📌 Found {len(existing_data)} text entries in {collection_name}. Deleting...")
+        if existing_images:
+            print(f"📌 Found {len(existing_images)} image metadata entries in {image_collection_name}. Deleting...")
+
+        # Step 2: Delete both text and image metadata collections
+        doc_service.delete_collection(collection_name)
+        doc_service.delete_collection(image_collection_name)
+
+        # Step 3: Verify if collections are actually deleted
+        remaining_text = doc_service.get_all_entries(collection_name)
+        remaining_images = doc_service.get_all_entries(image_collection_name)
+
+        if not remaining_text and not remaining_images:
+            print(f"✅ Successfully deleted all data from vector store.")
+        else:
+            print(f"⚠️ Warning: Some data is still present. Manual intervention may be needed.")
+
+    except Exception as e:
+        st.error(f"⚠️ Error removing from vector store: {e}")
+
+    # ✅ Clear session state metadata
+    keys_to_clear = ["selected_file", "conversation_history", "last_bot_question", "last_expected_answer"]
+    for key in keys_to_clear:
+        if key in st.session_state:
+            del st.session_state[key]
+
+    # ✅ Save updated list to disk
+    save_processed_files(st.session_state["processed_files"])
+
+    st.success(f"✅ Successfully cleared all data related to {file_to_clear}.")
+
 # UI Setup
 st.title("🤖 Your Academic Chatbot")
 
@@ -713,6 +572,10 @@ with st.sidebar:
             st.session_state["processed_files"],
             disabled=st.session_state["uploading"]
         )
+    # Add the "Clear Selected File" button
+        if st.button("Clear Selected File", key="clear_selected_file"):
+            clear_selected_file()
+            st.rerun()
 
 if st.session_state["uploading"]:
     st.stop()
