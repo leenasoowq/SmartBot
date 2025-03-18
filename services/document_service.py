@@ -41,29 +41,6 @@ class DocumentService:
             embedding_function=self.embedding_model
         )
 
-    def encode_Image(image_path):
-        with open(image_path, "rb") as image_file:
-            return base64.b64encode(image_file.read()).decode("utf-8")
-
-    def process_image(image_path, prompt="Describe this image"):
-        encoded_image = encode_Image(image_path)
-        response = openai.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant that responds in Markdown."},
-                {"role": "user", "content": f"Describe the image: {prompt}"},
-            ],
-            images=[
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/jpeg;base64,{encoded_image}"
-                    }
-                }
-            ]
-        )
-        return response.choices[0].message.content
-
     def process_pdf(self, file_path: str, collection_name: str = "default_collection"):
         """Processes a PDF file, extracting text and images, and sending images to OpenAI for descriptions."""
         

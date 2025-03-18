@@ -1,3 +1,5 @@
+import base64
+import io
 import os
 import streamlit as st
 from dotenv import load_dotenv
@@ -9,6 +11,11 @@ import numpy as np
 import re
 import json
 import shutil
+import openai
+from PIL import Image  
+from langchain.chat_models import ChatOpenAI
+from langchain.schema import SystemMessage, HumanMessage
+
 
 
 from services.language_service import LanguageService
@@ -256,26 +263,41 @@ def extract_page_number(query):
 
 def process_response(user_input):
     """Process the user's query and generate a response with source attribution."""
-    if not user_input.strip():
+    if user_input is None:
         return
-    
-    if detect_image_request(user_input):
-        return handle_image_request(user_input)
-    
-    if detect_summary_request(user_input):
-        return handle_summary_request()
-    
-    if detect_quiz_request(user_input):
-        return handle_quiz_request()
-    
-    if is_quiz_answering():
-        return handle_quiz_answering(user_input)
-    
-    if detect_weakness_request(user_input):
-        return handle_weakness_analysis()
-    
-    return handle_general_query(user_input)
 
+    # Determine if input is text or image
+    if isinstance(user_input, str):  # If it's text, strip it
+        user_text = user_input.strip()
+        user_image = None
+    elif isinstance(user_input, dict):  # If it's a dictionary (from chat), extract text and image
+        user_text = user_input.get("text", "").strip() if user_input.get("text") else ""
+        user_image = user_input.get("image")
+    else:
+        return  # Unknown input format, do nothing
+
+    # Process Image Query
+    if user_image:
+        return handle_image_query(user_image)
+
+    # Process Text Query
+    if user_text:
+        if detect_image_request(user_text):
+            return handle_image_request(user_text)
+
+        if detect_summary_request(user_text):
+            return handle_summary_request()
+
+        if detect_quiz_request(user_text):
+            return handle_quiz_request()
+
+        if is_quiz_answering():
+            return handle_quiz_answering(user_text)
+
+        if detect_weakness_request(user_text):
+            return handle_weakness_analysis()
+
+        return handle_general_query(user_text)
 def detect_image_request(user_input):
     return bool(re.search(r"image (?:at|on|in) page (\d+)", user_input.lower()))
 
@@ -291,6 +313,44 @@ def detect_weakness_request(user_input):
 
 def is_quiz_answering():
     return bool(st.session_state.get("last_bot_question")) and bool(st.session_state.get("last_expected_answer"))
+
+def handle_image_query(image_file):
+    """Processes the uploaded image and retrieves an explanation from GPT-4o Vision."""
+
+    try:
+        # Open image and convert to bytes
+        image = Image.open(image_file)
+        img_bytes = io.BytesIO()
+        image.save(img_bytes, format="PNG")
+        image_bytes = img_bytes.getvalue()
+
+        # Encode image to Base64
+        encoded_image = base64.b64encode(image_bytes).decode("utf-8")
+
+        # Initialize GPT-4o model
+        chain_gpt = ChatOpenAI(model="gpt-4o")
+
+        # Create prompt
+        prompt = [
+            SystemMessage(content="You are a bot that is good at analyzing images."),
+            HumanMessage(content="Describe the contents of this image."),
+            HumanMessage(content=[{"type": "image_url", "image_url": {"url": f"data:image/png;base64,{encoded_image}"}}])
+        ]
+
+        # Send image to OpenAI for description
+        response = chain_gpt.invoke(prompt)
+
+        # Extract response content
+        image_description = response.content if hasattr(response, "content") else "No description available"
+
+        # Update chat history and return result
+        update_conversation_history("assistant", image_description)
+        return image_description
+
+    except Exception as e:
+        error_message = f"Error processing image: {str(e)}"
+        update_conversation_history("assistant", error_message)
+        return error_message
 
 def handle_image_request(user_input):
     match = re.search(r"image (?:at|on|in) page (\d+)", user_input.lower()) 
@@ -451,13 +511,11 @@ def handle_general_query(user_input):
         update_conversation_history("assistant", f"Error: {e}")
 
 
-
-
 def reset_session_state():
     """Reset session variables that store conversation history and other related data."""
     keys_to_reset = [
         "conversation_history", "quiz_mode", "selected_file", 
-        "last_bot_question", "last_expected_answer", "pending_response", "weak_topics", "quiz_history"  
+        "last_bot_question", "last_expected_answer", "pending_response", "weak_topics", "quiz_history", "image_uploaded","files_to_upload"
     ]
     for key in keys_to_reset:
         if key in st.session_state:
@@ -466,42 +524,15 @@ def reset_session_state():
     st.session_state["conversation_history"] = []  # Ensure empty history is initialized
     st.session_state["weak_topics"] = []  # 🆕 Reinitialize empty weaknesses list
     st.session_state["quiz_history"] = [] 
+    st.session_state["image_uploaded"] = None 
+    st.session_state["pending_response"] = None 
+    st.session_state["files_to_upload"] = None 
 
-    
+    st.session_state["uploader_key"] += 1  
+    st.rerun()
+   
     update_conversation_history("assistant", "✅ Chat history, quiz progress, and weaknesses have been cleared. Processed files remain intact.")
 
-# def clear_selected_file():
-#     """Clear metadata, images, and stored data of the selected file."""
-#     if not st.session_state["selected_file"]:
-#         st.warning("No file selected to clear.")
-#         return
-
-#     file_to_clear = st.session_state["selected_file"]
-
-#     # Remove from processed files list
-#     if file_to_clear in st.session_state["processed_files"]:
-#         st.session_state["processed_files"].remove(file_to_clear)
-
-#     # Delete associated metadata file
-#     metadata_file = os.path.join("data", f"{file_to_clear}.json")
-#     if os.path.exists(metadata_file):
-#         os.remove(metadata_file)
-
-#     # Delete images folder associated with the file
-#     image_folder = os.path.join("images", file_to_clear)
-#     if os.path.exists(image_folder):
-#         shutil.rmtree(image_folder)
-
-#     # Delete data folder associated with the file
-#     data_folder = os.path.join("data", file_to_clear)
-#     if os.path.exists(data_folder):
-#         shutil.rmtree(data_folder)
-
-#     # Update the session state and save to disk
-#     st.session_state["selected_file"] = None
-#     save_processed_files(st.session_state["processed_files"])
-
-#     st.success(f"Cleared all data related to {file_to_clear}.")
 
 def clear_selected_file():
     """Fully remove a selected file's metadata, images, vector data, and ChromaDB stored files."""
@@ -583,6 +614,20 @@ def clear_selected_file():
 # UI Setup
 st.title("🤖 Your Academic Chatbot")
 
+# Upload Image
+st.subheader("Upload an Image for Analysis")
+image_file = st.file_uploader("Choose an image to be explained", type=["png", "jpg", "jpeg"],  key=f"image_uploader_{st.session_state.get('uploader_key', 0)}")
+
+if image_file:
+    if "image_uploaded" not in st.session_state or st.session_state["image_uploaded"] != image_file:
+        st.session_state["conversation_history"].append(("user", "📷 [Image Uploaded]"))
+        st.session_state["image_uploaded"] = image_file  # Store uploaded image reference
+        st.session_state["pending_response"] = {"text": None, "image": image_file}
+
+        # Prevent infinite rerun after clearing history
+        if image_file is not None:
+            st.rerun()  # Rerun only when a new image is uploaded
+
 if "uploading" not in st.session_state:
     st.session_state["uploading"] = False
 if "files_to_upload" not in st.session_state:
@@ -639,19 +684,29 @@ with st.sidebar:
 if st.session_state["uploading"]:
     st.stop()
 
-# Chat Interface
 st.header("Chat")
 chat_container = st.container()
+
+
+if "conversation_history" not in st.session_state:
+    st.session_state["conversation_history"] = []
+if "pending_response" not in st.session_state:
+    st.session_state["pending_response"] = None
+if "image_uploaded" not in st.session_state:
+    st.session_state["image_uploaded"] = None  # Track uploaded image to avoid infinite loop
+
 with chat_container:
-    for role, message in st.session_state.get("conversation_history", []):
+    for role, message in st.session_state["conversation_history"]:
         with st.chat_message(role):
             st.markdown(message)
 
+
 # Dynamic Chat Input
-prompt = st.chat_input("Enter your query:", disabled=st.session_state["uploading"])
+prompt = st.chat_input("Enter your query:", disabled=st.session_state.get("uploading", False))
+
 if prompt:
-    update_conversation_history("user", prompt)
-    st.session_state["pending_response"] = prompt
+    st.session_state["conversation_history"].append(("user", f"📝 {prompt}"))
+    st.session_state["pending_response"] = {"text": prompt, "image": None}
     st.rerun()
 
 # Process the response if there's a pending input
@@ -661,6 +716,7 @@ if st.session_state["pending_response"]:
     st.session_state["pending_response"] = None
     st.rerun()
 
+# Clear Chat History
 if st.button("Clear History"):
     reset_session_state()
-    st.rerun()  # Re-run the app to refresh the UI
+    st.rerun()
