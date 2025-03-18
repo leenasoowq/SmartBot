@@ -66,12 +66,18 @@ def update_conversation_history(role, message):
         print(f"⚠️ Invalid role detected: {role}, message: {message}")
         return
     
+    # Ensure session state is initialized
+    if "conversation_history" not in st.session_state:
+        st.session_state["conversation_history"] = []
+
+    # Append the new message
     st.session_state["conversation_history"].append((role, message))
     
-    # Store last bot response explicitly for follow-ups
+    # Store the last bot response explicitly for follow-ups
     if role == "assistant":
-        st.session_state["last_bot_answer"] = message  # Store last bot answer
+        st.session_state["last_bot_answer"] = message  
 
+    # Maintain history limit
     if len(st.session_state["conversation_history"]) > MAX_HISTORY:
         st.session_state["conversation_history"] = st.session_state["conversation_history"][-MAX_HISTORY:]
 
@@ -265,10 +271,13 @@ def process_response(user_input):
     if is_quiz_answering():
         return handle_quiz_answering(user_input)
     
+    if detect_weakness_request(user_input):
+        return handle_weakness_analysis()
+    
     return handle_general_query(user_input)
 
 def detect_image_request(user_input):
-    return bool(re.search(r"image at page (\d+)", user_input.lower()))
+    return bool(re.search(r"image (?:at|on|in) page (\d+)", user_input.lower()))
 
 def detect_summary_request(user_input):
     return "summarize" in user_input.lower() or "give a summary" in user_input.lower()
@@ -276,11 +285,16 @@ def detect_summary_request(user_input):
 def detect_quiz_request(user_input):
     return "quiz" in user_input.lower() or "test me" in user_input.lower()
 
+def detect_weakness_request(user_input):
+    """Detects when the user asks about their weaknesses or what they should study."""
+    return any(phrase in user_input.lower() for phrase in ["my weakness", "what should i study", "what am i weak at"])
+
 def is_quiz_answering():
     return bool(st.session_state.get("last_bot_question")) and bool(st.session_state.get("last_expected_answer"))
 
 def handle_image_request(user_input):
-    page_num = int(re.search(r"image at page (\d+)", user_input.lower()).group(1))
+    match = re.search(r"image (?:at|on|in) page (\d+)", user_input.lower()) 
+    page_num = int(match.group(1))
     image_data = doc_service.retrieve_image_summary(page_num)
     
     if image_data:
@@ -338,6 +352,7 @@ def handle_summary_request():
         print(f"Debug: Error in summary generation - {e}")
 
 def handle_quiz_request():
+    """Generate a quiz question based on document content."""
     file_name = st.session_state.get("selected_file")
     if not file_name:
         return update_conversation_history("assistant", "⚠️ No document selected. Upload or select a file first.")
@@ -358,20 +373,67 @@ def handle_quiz_request():
         
         question = r.choices[0].message.content.strip().split("? ")[0] + "?"
         update_conversation_history("assistant", f"📝 **Quiz Question:**\n\n**{question}**")
+        
         st.session_state["last_bot_question"] = question
         st.session_state["last_expected_answer"] = get_expected_answer(question)
     except Exception as e:
         update_conversation_history("assistant", f"Error generating quiz question: {e}")
 
 def handle_quiz_answering(user_input):
-    evaluation = evaluate_user_answer(user_input, st.session_state["last_expected_answer"])
+    """Evaluate the user's quiz answer and track incorrect responses."""
     correct_answer = st.session_state["last_expected_answer"]
+    evaluation = evaluate_user_answer(user_input, correct_answer)
+
+    if "quiz_history" not in st.session_state:
+        st.session_state["quiz_history"] = []  # Initialize quiz memory
     
-    feedback = f"✅ **Evaluation:** {evaluation}\n\n📌 Correct Answer: {correct_answer}" if evaluation != "Don't Know" else f"⚠️ You didn't know the answer. Here is the correct answer:\n\n**{correct_answer}**"
+    quiz_result = {
+        "question": st.session_state["last_bot_question"],
+        "user_answer": user_input,
+        "correct_answer": correct_answer,
+        "evaluation": evaluation
+    }
     
+    st.session_state["quiz_history"].append(quiz_result)  # Store result
+
+    # If the answer is incorrect or the user said "idk", store it in weaknesses
+    if evaluation.lower() == "incorrect" or user_input.lower() in ["idk", "i don't know"]:
+        if "weak_topics" not in st.session_state:
+            st.session_state["weak_topics"] = []
+        st.session_state["weak_topics"].append(quiz_result)
+
+    feedback = f"✅ **Evaluation:** {evaluation}\n\n📌 Correct Answer: {correct_answer}" if evaluation.lower() != "incorrect" else f"❌ **Incorrect.**\n\n📌 Correct Answer: {correct_answer}"
+
     update_conversation_history("assistant", feedback)
     st.session_state["last_bot_question"] = ""
     st.session_state["last_expected_answer"] = ""
+
+def handle_weakness_analysis():
+    """Analyze user's past quiz results and determine weaknesses."""
+    if "weak_topics" not in st.session_state or not st.session_state["weak_topics"]:
+        update_conversation_history("assistant", "🎯 No major weaknesses detected! Keep learning and improving.")
+        return
+
+    weak_analysis = ["📊 **Weakness Analysis:**\n"]
+    topic_counts = {}
+
+    # Track weak topics based on incorrect answers
+    for entry in st.session_state["weak_topics"]:
+        topic = entry["question"].split(" ")[0]  # Extract the first word as topic
+        topic_counts[topic] = topic_counts.get(topic, 0) + 1
+    
+    # Identify the most common weak topics
+    if topic_counts:
+        most_frequent_topic = max(topic_counts, key=topic_counts.get)
+        weak_analysis.append(f"🚨 You frequently miss questions related to **{most_frequent_topic}**. Consider studying this area further.")
+
+    # Show specific quiz mistakes
+    weak_analysis.append("\n❌ **Questions You Got Wrong:**\n")
+    for entry in st.session_state["weak_topics"]:
+        weak_analysis.append(f"**Q:** {entry['question']}\n💡 **Correct Answer:** {entry['correct_answer']}\n")
+
+    response_text = "\n".join(weak_analysis)
+    update_conversation_history("assistant", response_text)
 
 def handle_general_query(user_input):
     context_str = ""  # Load relevant context if available
@@ -395,55 +457,51 @@ def reset_session_state():
     """Reset session variables that store conversation history and other related data."""
     keys_to_reset = [
         "conversation_history", "quiz_mode", "selected_file", 
-        "last_bot_question", "last_expected_answer", "pending_response"
+        "last_bot_question", "last_expected_answer", "pending_response", "weak_topics", "quiz_history"  
     ]
     for key in keys_to_reset:
         if key in st.session_state:
             del st.session_state[key]
 
-def clear_selected_file():
-    """Clear metadata, images, and stored data of the selected file."""
-    if not st.session_state["selected_file"]:
-        st.warning("No file selected to clear.")
-        return
+    st.session_state["conversation_history"] = []  # Ensure empty history is initialized
+    st.session_state["weak_topics"] = []  # 🆕 Reinitialize empty weaknesses list
+    st.session_state["quiz_history"] = [] 
 
-    file_to_clear = st.session_state["selected_file"]
+    
+    update_conversation_history("assistant", "✅ Chat history, quiz progress, and weaknesses have been cleared. Processed files remain intact.")
 
-    # Remove from processed files list
-    if file_to_clear in st.session_state["processed_files"]:
-        st.session_state["processed_files"].remove(file_to_clear)
+# def clear_selected_file():
+#     """Clear metadata, images, and stored data of the selected file."""
+#     if not st.session_state["selected_file"]:
+#         st.warning("No file selected to clear.")
+#         return
 
-    # Delete associated metadata file
-    metadata_file = os.path.join("data", f"{file_to_clear}.json")
-    if os.path.exists(metadata_file):
-        os.remove(metadata_file)
+#     file_to_clear = st.session_state["selected_file"]
 
-    # Delete images folder associated with the file
-    image_folder = os.path.join("images", file_to_clear)
-    if os.path.exists(image_folder):
-        shutil.rmtree(image_folder)
+#     # Remove from processed files list
+#     if file_to_clear in st.session_state["processed_files"]:
+#         st.session_state["processed_files"].remove(file_to_clear)
 
-    # Delete data folder associated with the file
-    data_folder = os.path.join("data", file_to_clear)
-    if os.path.exists(data_folder):
-        shutil.rmtree(data_folder)
+#     # Delete associated metadata file
+#     metadata_file = os.path.join("data", f"{file_to_clear}.json")
+#     if os.path.exists(metadata_file):
+#         os.remove(metadata_file)
 
-    # Update the session state and save to disk
-    st.session_state["selected_file"] = None
-    save_processed_files(st.session_state["processed_files"])
+#     # Delete images folder associated with the file
+#     image_folder = os.path.join("images", file_to_clear)
+#     if os.path.exists(image_folder):
+#         shutil.rmtree(image_folder)
 
-    st.success(f"Cleared all data related to {file_to_clear}.")
+#     # Delete data folder associated with the file
+#     data_folder = os.path.join("data", file_to_clear)
+#     if os.path.exists(data_folder):
+#         shutil.rmtree(data_folder)
 
+#     # Update the session state and save to disk
+#     st.session_state["selected_file"] = None
+#     save_processed_files(st.session_state["processed_files"])
 
-def reset_session_state():
-    """Reset session variables that store conversation history and other related data."""
-    keys_to_reset = [
-        "conversation_history", "quiz_mode", "selected_file", 
-        "last_bot_question", "last_expected_answer", "pending_response","image_history"
-    ]
-    for key in keys_to_reset:
-        if key in st.session_state:
-            del st.session_state[key]
+#     st.success(f"Cleared all data related to {file_to_clear}.")
 
 def clear_selected_file():
     """Fully remove a selected file's metadata, images, vector data, and ChromaDB stored files."""
@@ -520,6 +578,7 @@ def clear_selected_file():
     save_processed_files(st.session_state["processed_files"])
 
     st.success(f"✅ Successfully cleared all data related to {file_to_clear}.")
+
 
 # UI Setup
 st.title("🤖 Your Academic Chatbot")
