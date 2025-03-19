@@ -143,13 +143,13 @@ class DocumentService:
         print(f"results {results} \n")
         print(f"Retrieved {len(results)} results from vector store.")
 
-         # ✅ Print all available metadata for debugging
+         # Print all available metadata for debugging
         if results:
-            print("📌 **Available Metadata from Vector Store:**")
+            print("**Available Metadata from Vector Store:**")
             for idx, result in enumerate(results):
-                print(f"📝 **Result {idx + 1} Metadata:** {json.dumps(result.metadata, indent=4)}")
+                print(f"**Result {idx + 1} Metadata:** {json.dumps(result.metadata, indent=4)}")
 
-        # ✅ Filter results to keep only relevant image documents
+        # Filter results to keep only relevant image documents
         filtered_results = [
             result for result in results
             if result.metadata
@@ -163,16 +163,16 @@ class DocumentService:
         ]
 
         if not filtered_results:
-            print(f"⚠️ No valid image found for Page {page_num}.")
+            print(f"No valid image found for Page {page_num}.")
             return None
 
-        # ✅ Select the most relevant image result
+        # Select the most relevant image result
         first_result = filtered_results[0] #using the second result cuz all the first will be logos ;-;
 
-        # ✅ Format the file path to use forward slashes for Streamlit compatibility
+        # Format the file path to use forward slashes for Streamlit compatibility
         formatted_path = first_result.metadata["image_path"].replace("\\", "/")
 
-        # ✅ Clean and format metadata before returning
+        # Clean and format metadata before returning
         formatted_metadata = {
             "image_path": formatted_path,
             "summary": first_result.metadata["summary"].strip(),  # Clean summary

@@ -136,7 +136,7 @@ if st.session_state["quiz_step"] == "select_options":
                 st.error(context_text)
             else:
                 try:
-                    with st.spinner("Generating quiz... Please wait! 🕒"):
+                    with st.spinner("Generating quiz... Please wait! "):
                         quiz_data = quiz_service.generate_quiz_questions(
                             context=context_text,
                             difficulty=st.session_state["difficulty"],

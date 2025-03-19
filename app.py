@@ -74,7 +74,7 @@ MAX_HISTORY = 50
 def update_conversation_history(role, message):
     """Append new message to conversation history and store last bot response."""
     if role not in ["user", "assistant"]:
-        print(f"⚠️ Invalid role detected: {role}, message: {message}")
+        print(f"Invalid role detected: {role}, message: {message}")
         return
     
     st.session_state["conversation_history"].append((role, message))
@@ -331,10 +331,10 @@ def handle_image_query(image_file):
 def handle_weakness_analysis():
     """Analyze user's past quiz results and determine weaknesses."""
     if "weak_topics" not in st.session_state or not st.session_state["weak_topics"]:
-        update_conversation_history("assistant", "🎯 No major weaknesses detected! Keep learning and improving.")
+        update_conversation_history("assistant", "No major weaknesses detected! Keep learning and improving.")
         return
 
-    weak_analysis = ["📊 **Weakness Analysis:**\n"]
+    weak_analysis = ["**Weakness Analysis:**\n"]
     topic_counts = {}
 
     # Track weak topics based on incorrect answers
@@ -345,10 +345,10 @@ def handle_weakness_analysis():
     # Identify the most common weak topics
     if topic_counts:
         most_frequent_topic = max(topic_counts, key=topic_counts.get)
-        weak_analysis.append(f"🚨 You frequently miss questions related to **{most_frequent_topic}**. Consider studying this area further.")
+        weak_analysis.append(f"You frequently miss questions related to **{most_frequent_topic}**. Consider studying this area further.")
 
     # Show specific quiz mistakes
-    weak_analysis.append("\n❌ **Questions You Got Wrong:**\n")
+    weak_analysis.append("\n**Questions You Got Wrong:**\n")
     for entry in st.session_state["weak_topics"]:
         weak_analysis.append(f"**Q:** {entry['question']}\n💡 **Correct Answer:** {entry['correct_answer']}\n")
 
@@ -399,9 +399,9 @@ def handle_image_request(user_input):
     image_data = doc_service.retrieve_image_summary(page_num)
     
     if image_data:
-        response_text = f"**📷 Image Explanation (Page {image_data['page_number']})**\n\n📌 **Summary:** {image_data['summary']}\n\n🖼️ *(Stored Image Path: {image_data['image_path']})*"
+        response_text = f"**📷 Image Explanation (Page {image_data['page_number']})**\n\n **Summary:** {image_data['summary']}\n\n *(Stored Image Path: {image_data['image_path']})*"
     else:
-        response_text = f"⚠️ No image metadata found for Page {page_num}."
+        response_text = f"No image metadata found for Page {page_num}."
     
     update_conversation_history("assistant", response_text)
 
@@ -409,7 +409,7 @@ def handle_summary_request():
     file_name = st.session_state.get("selected_file")
     
     if not file_name:
-        update_conversation_history("assistant", "⚠️ No document is selected. Please upload or select a file first.")
+        update_conversation_history("assistant", "No document is selected. Please upload or select a file first.")
         return
     
     # Retrieve content
@@ -417,7 +417,7 @@ def handle_summary_request():
     
     # Debug: Log chunk contents
     if not chunks:
-        update_conversation_history("assistant", "⚠️ Could not extract content from the document.")
+        update_conversation_history("assistant", "Could not extract content from the document.")
         print("Debug: No content extracted from document.")
         return
     
@@ -427,7 +427,7 @@ def handle_summary_request():
     print(f"Debug: Extracted document text length - {len(document_text)} characters")
 
     if len(document_text.strip()) < 100:
-        update_conversation_history("assistant", "⚠️ Document content is too short for summarization.")
+        update_conversation_history("assistant", "Document content is too short for summarization.")
         print("Debug: Extracted text is too short.")
         return
     
@@ -447,12 +447,11 @@ def handle_summary_request():
         # Debug: Log summary output
         print(f"Debug: Generated summary - {summary}")
 
-        update_conversation_history("assistant", f"📌 **Summary:**\n\n{summary}")
+        update_conversation_history("assistant", f"**Summary:**\n\n{summary}")
     except Exception as e:
         update_conversation_history("assistant", f"Error generating summary: {e}")
         print(f"Debug: Error in summary generation - {e}")
 
-# Function to process the user's query and generate a response
 # Function to process the user's query and generate a response
 def process_response(user_input):
     """Process the user's query and generate a response with source attribution."""
@@ -493,11 +492,11 @@ def process_response(user_input):
         if search_results:
             if "response_text" not in locals():
                 response_text = ""  # Ensure variable exists
-            response_text += "\n\n📚 **Here are some references for further reading:**\n" + "\n".join(
+            response_text += "\n\n**Here are some references for further reading:**\n" + "\n".join(
                 [f"- [{title}]({link})" for title, link in search_results]
             )
         else:
-            response_text += "\n\n⚠️ I couldn't find relevant sources online."
+            response_text += "\n\nI couldn't find relevant sources online."
     
     # Check if the user's query is a follow-up question
     if is_follow_up(user_input):
@@ -532,7 +531,7 @@ def process_response(user_input):
     # Ensure document_text is initialized
     document_text = "\n\n".join(chunks) if isinstance(chunks, list) else str(chunks) if chunks else ""
 
-    # ✅ Ensure context_str is initialized before using it
+    # Ensure context_str is initialized before using it
     context_str = document_text  
 
     if not chunks or "No relevant chunks found" in context_str or "Error" in context_str:
@@ -667,7 +666,7 @@ def reset_session_state():
             del st.session_state[key]
 
     st.session_state["conversation_history"] = []  # Ensure empty history is initialized
-    st.session_state["weak_topics"] = []  # 🆕 Reinitialize empty weaknesses list
+    st.session_state["weak_topics"] = []  # Reinitialize empty weaknesses list
     st.session_state["quiz_history"] = [] 
     st.session_state["image_uploaded"] = None 
     st.session_state["pending_response"] = None 
@@ -676,7 +675,7 @@ def reset_session_state():
     st.session_state["uploader_key"] += 1  
     st.rerun()
    
-    update_conversation_history("assistant", "✅ Chat history, quiz progress, and weaknesses have been cleared. Processed files remain intact.")
+    update_conversation_history("assistant", "hat history, quiz progress, and weaknesses have been cleared. Processed files remain intact.")
 
 # Function to remove a selected file from the processed files list
 def clear_selected_file():
@@ -689,44 +688,44 @@ def clear_selected_file():
     collection_name = sanitize_collection_name(file_to_clear)
     image_collection_name = f"{collection_name}_images"
 
-    # ✅ Remove from processed files list
+    # Remove from processed files list
     if file_to_clear in st.session_state["processed_files"]:
         st.session_state["processed_files"].remove(file_to_clear)
 
-    # ✅ Delete metadata file (stored JSON file)
+    # Delete metadata file (stored JSON file)
     metadata_file = os.path.join("data", f"{file_to_clear}.json")
     if os.path.exists(metadata_file):
         os.remove(metadata_file)
 
-    # ✅ Delete stored images
+    # Delete stored images
     image_folder = os.path.join("images", file_to_clear)
     if os.path.exists(image_folder):
         shutil.rmtree(image_folder)
 
-    # ✅ Delete stored data (text/vector data)
+    # Delete stored data (text/vector data)
     data_folder = os.path.join("data", file_to_clear)
     if os.path.exists(data_folder):
         shutil.rmtree(data_folder)
 
-    # ✅ Delete ChromaDB stored data (Persistent Mode)
+    # Delete ChromaDB stored data (Persistent Mode)
     chromadb_folder = "chroma_db"  # Change this to the actual ChromaDB storage path
     if os.path.exists(chromadb_folder):
         try:
             shutil.rmtree(chromadb_folder)
-            print(f"✅ Successfully deleted ChromaDB folder: {chromadb_folder}")
+            print(f"Successfully deleted ChromaDB folder: {chromadb_folder}")
         except Exception as e:
-            print(f"⚠️ Error deleting ChromaDB folder: {e}")
+            print(f"Error deleting ChromaDB folder: {e}")
 
-    # ✅ Ensure all data is removed from the vector database
+    # Ensure all data is removed from the vector database
     try:
         # Step 1: Check existing data before deletion
         existing_data = doc_service.get_all_entries(collection_name)
         existing_images = doc_service.get_all_entries(image_collection_name)
         
         if existing_data:
-            print(f"📌 Found {len(existing_data)} text entries in {collection_name}. Deleting...")
+            print(f"Found {len(existing_data)} text entries in {collection_name}. Deleting...")
         if existing_images:
-            print(f"📌 Found {len(existing_images)} image metadata entries in {image_collection_name}. Deleting...")
+            print(f"Found {len(existing_images)} image metadata entries in {image_collection_name}. Deleting...")
 
         # Step 2: Delete both text and image metadata collections
         doc_service.delete_collection(collection_name)
@@ -737,23 +736,23 @@ def clear_selected_file():
         remaining_images = doc_service.get_all_entries(image_collection_name)
 
         if not remaining_text and not remaining_images:
-            print(f"✅ Successfully deleted all data from vector store.")
+            print(f"Successfully deleted all data from vector store.")
         else:
-            print(f"⚠️ Warning: Some data is still present. Manual intervention may be needed.")
+            print(f"Warning: Some data is still present. Manual intervention may be needed.")
 
     except Exception as e:
-        st.error(f"⚠️ Error removing from vector store: {e}")
+        st.error(f"Error removing from vector store: {e}")
 
-    # ✅ Clear session state metadata
+    # Clear session state metadata
     keys_to_clear = ["selected_file", "conversation_history", "last_bot_question", "last_expected_answer"]
     for key in keys_to_clear:
         if key in st.session_state:
             del st.session_state[key]
 
-    # ✅ Save updated list to disk
+    # Save updated list to disk
     save_processed_files(st.session_state["processed_files"])
 
-    st.success(f"✅ Successfully cleared all data related to {file_to_clear}.")
+    st.success(f"Successfully cleared all data related to {file_to_clear}.")
 
 # UI Setup
 st.title("🤖 Your Academic Chatbot")
