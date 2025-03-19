@@ -73,9 +73,10 @@ def preprocess_files(files):
         file_path = os.path.join(upload_dir, file.name)
         with open(file_path, "wb") as f:
             f.write(file.getbuffer())
-        docs = doc_service.process_pdf(file_path)
+        docs = doc_service.process_pdf(file_path)  # Note: process_pdf returns (text_docs, image_docs)
         collection_name = sanitize_collection_name(file.name)
-        doc_service.add_documents_to_vectorstore(docs, collection_name)
+        doc_service.add_documents_to_vectorstore(docs[0], collection_name)  # Add text docs
+        doc_service.add_documents_to_vectorstore(docs[1], f"{collection_name}_images")  # Add image docs
         st.session_state["processed_files"].append(file.name)
         processed_count += 1
         os.remove(file_path)
@@ -84,22 +85,20 @@ def preprocess_files(files):
 def load_context_for_file(file_name, top_k=10):
     """Retrieve relevant content from a document for quiz generation."""
     collection_name = sanitize_collection_name(file_name)
-    print(f"Loading context from collection: {collection_name}")
+    print(f"DEBUG: Loading context from collection: {collection_name}")
 
     # Query for broad content extraction (ensures variety in quiz questions)
     query = "Summarize key concepts, definitions, and important details from this document."
-
     chunks = doc_service.retrieve_relevant_chunks(query, collection_name, top_k=top_k)
 
     if not chunks:
-        print(f"ERROR: No relevant chunks found for {file_name}")
+        print(f"DEBUG: ERROR: No relevant chunks found for {file_name}")
         return "No relevant chunks found."
 
-    print(f"Retrieved {len(chunks)} chunks for quiz generation.")
-    
+    print(f"DEBUG: Retrieved {len(chunks)} chunks for quiz generation.")
     # Debugging: Print first 3 chunks to check retrieved content
     for i, chunk in enumerate(chunks[:3]):
-        print(f"Chunk {i+1}: {chunk[:300]}")  # Print first 300 characters for preview
+        print(f"DEBUG: Chunk {i+1}: {chunk[:300]}")  # Print first 300 characters for preview
 
     return "\n\n".join(chunks)
 
@@ -132,7 +131,7 @@ if st.session_state["quiz_step"] == "select_options":
         if st.button("Generate Quiz"):
             reset_quiz_state()
             context_text = load_context_for_file(selected_file)
-            if "Error" in context_text:
+            if "No relevant chunks found" in context_text:
                 st.error(context_text)
             else:
                 try:
@@ -142,15 +141,14 @@ if st.session_state["quiz_step"] == "select_options":
                             difficulty=st.session_state["difficulty"],
                             num_questions=st.session_state["num_questions"]
                         )
-                    st.write("Quiz Data Generated:", quiz_data)  # Debugging output
                     if not quiz_data:
-                        st.error("No quiz questions could be generated.")
+                        st.error("No quiz questions could be generated from the provided context.")
                     else:
                         st.session_state["quiz_data"] = quiz_data
                         st.session_state["quiz_step"] = "in_progress"
                         st.rerun()
                 except Exception as e:
-                    st.error(f"Failed to generate quiz questions: {e}")
+                    st.error(f"Failed to generate quiz questions due to an error: {e}")
                     reset_quiz_state()
                     st.rerun()
     else:

@@ -51,47 +51,60 @@ Explanation: <explanation_text>
                 temperature=0.5,
             )
             quiz_text = response.choices[0].message.content.strip()
-            print(f"GPT Response:\n{quiz_text}")  # Debug output
+            print(f"DEBUG: Raw GPT Response:\n{quiz_text}\n")  # Log raw GPT output
 
             question_blocks = quiz_text.split("\n\n")
             parsed_questions = []
 
-            for block in question_blocks:
+            def parse_quiz_block(block):
                 lines = [line.strip() for line in block.split("\n") if line.strip()]
-                if ("Correct Answer:" in block) and ("Explanation:" in block) and lines:
-                    try:
-                        question_line = lines[0].replace("Question: ", "").strip()
-                        option_a = lines[1].split(") ", 1)[1].strip()
-                        option_b = lines[2].split(") ", 1)[1].strip()
-                        option_c = lines[3].split(") ", 1)[1].strip()
-                        option_d = lines[4].split(") ", 1)[1].strip()
-                        correct_letter_line = lines[5].replace("Correct Answer:", "").strip().upper()
-                        explanation_line = lines[6].replace("Explanation:", "").strip()
+                if len(lines) < 6:  # Minimum lines for question + 4 options + answer/explanation
+                    print(f"DEBUG: Skipping malformed block (too few lines): {block}")
+                    return None
+                try:
+                    question = lines[0].replace("Question: ", "").strip()
+                    options = [lines[i].split(") ", 1)[1].strip() for i in range(1, 5)]
+                    correct_letter = lines[5].replace("Correct Answer:", "").strip().upper()
+                    explanation = lines[6].replace("Explanation:", "").strip()
+                    return (question, options, correct_letter, explanation)
+                except IndexError as e:
+                    print(f"DEBUG: Parsing error (IndexError) in block: {block}\nError: {e}")
+                    return None
+                except Exception as e:
+                    print(f"DEBUG: Parsing error in block: {block}\nError: {e}")
+                    return None
 
-                        options = [option_a, option_b, option_c, option_d]
-                        shuffled = options[:]
-                        random.shuffle(shuffled)
-                        
-                        original_index = ["A", "B", "C", "D"].index(correct_letter_line)
-                        correct_option_text = options[original_index]
-                        new_correct_index = shuffled.index(correct_option_text)
-                        new_correct_letter = ["A", "B", "C", "D"][new_correct_index]
+            for block in question_blocks:
+                parsed = parse_quiz_block(block)
+                if parsed:
+                    question, options, correct_letter, explanation = parsed
+                    shuffled = options[:]
+                    random.shuffle(shuffled)
+                    original_index = ["A", "B", "C", "D"].index(correct_letter)
+                    correct_option_text = options[original_index]
+                    new_correct_index = shuffled.index(correct_option_text)
+                    new_correct_letter = ["A", "B", "C", "D"][new_correct_index]
+                    confidence_score = self._compute_confidence(explanation, context)
+                    parsed_questions.append((
+                        question,
+                        shuffled,
+                        new_correct_letter,
+                        explanation,
+                        confidence_score
+                    ))
+                    print(f"DEBUG: Successfully parsed question: {question}")  # Log successful parsing
+                else:
+                    print(f"DEBUG: Failed to parse block: {block}")
 
-                        confidence_score = self._compute_confidence(explanation_line, context)
-
-                        parsed_questions.append((
-                            question_line,
-                            shuffled,
-                            new_correct_letter,
-                            explanation_line,
-                            confidence_score
-                        ))
-                    except Exception:
-                        continue
+            if not parsed_questions:
+                print("DEBUG: No valid questions parsed from GPT response.")
+            else:
+                print(f"DEBUG: Parsed {len(parsed_questions)} questions successfully.")
 
             return parsed_questions[:num_questions]
 
         except Exception as e:
+            print(f"DEBUG: API Error in generate_quiz_questions: {e}")
             return [(
                 "Error: Failed to generate quiz questions.", 
                 [], 

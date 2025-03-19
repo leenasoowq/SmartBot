@@ -8,7 +8,7 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import OpenAIEmbeddings
 from PIL import Image
-import pytesseract
+#import pytesseract
 from langchain.schema import Document
 import openai
 from langchain_openai import ChatOpenAI
