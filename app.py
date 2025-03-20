@@ -568,17 +568,15 @@ def process_response(user_input):
             return
         msgs = [
             {"role": "system", "content": (
-                  "You are an expert exam question generator. "
-                    "Generate **5 different short-answer questions** based on the document content, ensuring they are diverse, relevant, and fact-based. "
-                    "Then, **randomly select one** and return **only that one question** in your response."
-
+                "You generate a single **short-answer** question based on the provided content. "
+                "Ensure the question is relevant, fact-based, and answerable from the document."
+                "Do not ask about metadata such as author names, file details, document structure, or any non-content-related information."
             )},
-            {"role": "user", "content":f"Generate 1 short-answer questions from this document:\n\n{document_text}"}
+            {"role": "user", "content": f"Generate exactly one question based on the following content:\n\n{document_text}"}
         ]
         try:
             r = client.chat.completions.create(model="gpt-4", messages=msgs, max_tokens=100, temperature=0.7)
-            question = r.choices[0].message.content.strip() 
-            # question = r.choices[0].message.content.strip().split("? ")[0] + "?"
+            question = r.choices[0].message.content.strip().split("? ")[0] + "?"
             update_conversation_history("assistant", f"Here is your test question:\n\n**{question}**\n\nNote: I can only generate one short-answer question at a time.")
             
             # Store the generated question and its expected answer
