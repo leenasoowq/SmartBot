@@ -717,6 +717,7 @@ def clear_selected_file():
         except Exception as e:
             print(f"Error deleting ChromaDB folder: {e}")
 
+    """
     # Ensure all data is removed from the vector database
     try:
         # Step 1: Check existing data before deletion
@@ -743,7 +744,7 @@ def clear_selected_file():
 
     except Exception as e:
         st.error(f"Error removing from vector store: {e}")
-
+    """
     # Clear session state metadata
     keys_to_clear = ["selected_file", "conversation_history", "last_bot_question", "last_expected_answer"]
     for key in keys_to_clear:
