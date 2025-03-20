@@ -26,6 +26,8 @@ uploaded_audio = st.file_uploader(
 
 if uploaded_audio:
     file_path = os.path.join("uploads", uploaded_audio.name)
+    os.makedirs("uploads", exist_ok=True)  # Ensure uploads directory exists
+    
     with open(file_path, "wb") as f:
         f.write(uploaded_audio.getbuffer())
     
@@ -48,8 +50,10 @@ if uploaded_audio:
                 st.success("Translation complete!")
                 st.write(f"**Translated Text:**\n{translated_text}")
 
-                # Optionally save to disk
-                output_file = os.path.join("translated_texts", f"{uploaded_audio.name}.txt")
+                # Ensure translated_texts directory exists before saving
+                output_dir = "translated_texts"
+                os.makedirs(output_dir, exist_ok=True)
+                output_file = os.path.join(output_dir, f"{uploaded_audio.name}.txt")
                 with open(output_file, "w", encoding="utf-8") as out:
                     out.write(translated_text)
                 st.write(f"Saved to: {output_file}")
