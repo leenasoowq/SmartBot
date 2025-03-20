@@ -31,6 +31,7 @@ doc_service = DocumentService(client)
 embedding_model = doc_service.embedding_model
 
 # File to store persistent data
+os.makedirs("data", exist_ok=True)
 PROCESSED_FILES_STORAGE = "data/processed_files.json"
 
 # Load processed files from disk if exists
