@@ -11,7 +11,7 @@ from PIL import Image
 #import pytesseract
 from langchain.schema import Document
 import openai
-from langchain_openai import ChatOpenAI
+from langchain.chat_models import ChatOpenAI
 from langchain.schema.messages import HumanMessage, AIMessage, SystemMessage
 import base64
 

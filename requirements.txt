@@ -7,3 +7,6 @@ pydub
 chromadb
 langchain_community
 nbformat
+fitz
+frontend
+pymupdf

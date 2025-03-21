@@ -1,5 +1,3 @@
-# transcribe_translate.py (or pages/transcribe_translate.py)
-
 import os
 import streamlit as st
 from openai import OpenAI

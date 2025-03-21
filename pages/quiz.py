@@ -16,9 +16,12 @@ MAX_QUESTIONS = 10
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY)
+# Initialize DocumentService
+doc_service = DocumentService(client) 
 
-doc_service = DocumentService(client)
-quiz_service = QuizService(client)
+# Pass doc_service to QuizService
+quiz_service = QuizService(client, doc_service)
+
 
 # Session state for quiz
 if "quiz_step" not in st.session_state:
@@ -45,63 +48,6 @@ def reset_quiz_state():
         "correct_count": 0,
     })
 
-def sanitize_collection_name(file_name: str) -> str:
-    """Sanitize file name for Chroma collection: alphanumeric, underscore, hyphen only."""
-    base_name = file_name.rsplit(".", 1)[0]
-    sanitized = "".join(c for c in base_name if c.isalnum() or c in ["_", "-"])
-    while "__" in sanitized or "--" in sanitized:
-        sanitized = sanitized.replace("__", "_").replace("--", "-")
-    sanitized = sanitized.strip("_-")
-    sanitized = sanitized[:63]
-    if len(sanitized) < 3:
-        sanitized += "_doc"
-    return sanitized
-
-def preprocess_files(files):
-    """Process uploaded PDF files and store them in the vector store with collections."""
-    upload_dir = "uploads"
-    os.makedirs(upload_dir, exist_ok=True)
-
-    new_files = [f.name for f in files if f.name not in st.session_state["processed_files"]]
-    if not new_files:
-        return "No new files to process."
-
-    processed_count = 0
-    for file in files:
-        if file.name not in new_files:
-            continue
-        file_path = os.path.join(upload_dir, file.name)
-        with open(file_path, "wb") as f:
-            f.write(file.getbuffer())
-        docs = doc_service.process_pdf(file_path)  # Note: process_pdf returns (text_docs, image_docs)
-        collection_name = sanitize_collection_name(file.name)
-        doc_service.add_documents_to_vectorstore(docs[0], collection_name)  # Add text docs
-        doc_service.add_documents_to_vectorstore(docs[1], f"{collection_name}_images")  # Add image docs
-        st.session_state["processed_files"].append(file.name)
-        processed_count += 1
-        os.remove(file_path)
-    return f"Processed {processed_count} new file(s) successfully!"
-
-def load_context_for_file(file_name, top_k=10):
-    """Retrieve relevant content from a document for quiz generation."""
-    collection_name = sanitize_collection_name(file_name)
-    print(f"DEBUG: Loading context from collection: {collection_name}")
-
-    # Query for broad content extraction (ensures variety in quiz questions)
-    query = "Summarize key concepts, definitions, and important details from this document."
-    chunks = doc_service.retrieve_relevant_chunks(query, collection_name, top_k=top_k)
-
-    if not chunks:
-        print(f"DEBUG: ERROR: No relevant chunks found for {file_name}")
-        return "No relevant chunks found."
-
-    print(f"DEBUG: Retrieved {len(chunks)} chunks for quiz generation.")
-    # Debugging: Print first 3 chunks to check retrieved content
-    for i, chunk in enumerate(chunks[:3]):
-        print(f"DEBUG: Chunk {i+1}: {chunk[:300]}")  # Print first 300 characters for preview
-
-    return "\n\n".join(chunks)
-
 def handle_answer_submission(q_index, labeled_options, correct_letter):
     """Handle user answer submission and update score."""
     user_letter_idx = labeled_options.index(st.session_state[f"quiz_q_{q_index}"])
@@ -122,7 +68,7 @@ if st.session_state["quiz_step"] == "select_options":
     
     uploaded_files = st.file_uploader("Upload PDFs", type="pdf", accept_multiple_files=True)
     if uploaded_files:
-        msg = preprocess_files(uploaded_files)
+        msg = quiz_service.preprocess_files(uploaded_files)
         st.success(msg)
 
     if st.session_state["processed_files"]:
@@ -130,7 +76,7 @@ if st.session_state["quiz_step"] == "select_options":
         
         if st.button("Generate Quiz"):
             reset_quiz_state()
-            context_text = load_context_for_file(selected_file)
+            context_text = quiz_service.load_context_for_file(selected_file)
             if "No relevant chunks found" in context_text:
                 st.error(context_text)
             else:

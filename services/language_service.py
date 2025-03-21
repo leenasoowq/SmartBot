@@ -1,5 +1,3 @@
-# services/language_service.py
-
 from openai import OpenAI
 
 class LanguageService:
