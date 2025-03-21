@@ -13,8 +13,10 @@ Welcome to **SmartBot**, your **AI-powered** academic assistant! This app helps 
 ---
 ## Motivation 
 With the rise of ChatGPT, many students have adopted it as a study companion. However, through deeper research, I identified several limitations:
+
 - ChatGPT relies solely on **pretrained knowledge** rather than **Retrieval-Augmented Generation (RAG)**.
 - It lacks **interactive learning features** to help students test their understanding on specific lecture materials.
+
 To address these gaps, I developed **SmartBot** — an AI-powered learning assistant designed to enhance self-directed learning through *context-aware explanations*, *interactive quizzes*, and *lecture video support*.
 ---
 ## Key Features
