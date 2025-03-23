@@ -17,7 +17,7 @@ With the rise of ChatGPT, many students have adopted it as a study companion. Ho
 - ChatGPT relies solely on **pretrained knowledge** rather than **Retrieval-Augmented Generation (RAG)**.
 - It lacks **interactive learning features** to help students test their understanding on specific lecture materials.
 
-To address these gaps, I developed **SmartBot** — an AI-powered learning assistant designed to enhance self-directed learning through *context-aware explanations*, *interactive quizzes*, and *lecture video support*.
+To address these gaps, **SmartBot** was developed — an AI-powered learning assistant designed to enhance self-directed learning through *context-aware explanations*, *interactive quizzes*, and *lecture video support*.
 ---
 ## Key Features
 
@@ -82,14 +82,6 @@ SmartBot supports **audio and video lectures** by integrating OpenAI’s **Whisp
 | Vector Store      | ChromaDB                   |
 | Framework         | LangChain + Streamlit      |
 | Deployment        | Localhost / Cloud-ready    |
-
----
-
-## 🙏 Acknowledgements
-
-This project was built with great passion and commitment to creating a helpful, real-world learning tool. It has received encouraging feedback from users.
-
-I hope my efforts are evident in the design and implementation of **SmartBot** — and I respectfully request that this dedication be reflected in my evaluation.
 
 ---
 
