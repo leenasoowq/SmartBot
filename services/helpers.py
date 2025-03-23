@@ -550,6 +550,8 @@ def process_response(user_input):
     if not user_text and not user_image:
         return
     
+    response_text = "" 
+    
      # Process Image Query
     if user_image:
         return handle_image_query(user_image)
@@ -562,7 +564,7 @@ def process_response(user_input):
         if detect_weakness_request(user_text):
             return handle_weakness_analysis()
     
-    if detect_reference_request(user_text):  
+    if detect_reference_request(user_text): 
         # Determine the correct query: use last response if it's a follow-up, else use the user query.
         if is_follow_up(user_text):
             reference_query = st.session_state.get("last_bot_answer", user_text)
@@ -573,8 +575,6 @@ def process_response(user_input):
         search_results = fetch_online_references(reference_query)
 
         if search_results:
-            if "response_text" not in locals():
-                response_text = ""  # Ensure variable exists
             response_text += "\n\n**Here are some references for further reading:**\n" + "\n".join(
                 [f"- [{title}]({link})" for title, link in search_results]
             )
